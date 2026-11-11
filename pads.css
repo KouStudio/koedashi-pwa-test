@@ -13,3 +13,10 @@ html[data-app-mode=pads] #status,html[data-app-mode=pads] .pwa-install{display:n
 @media(max-width:380px){#koModes{gap:6px}.ko-mode-buttons button{padding:10px 6px;font-size:14px}.ko-stop-top{min-width:84px;padding:10px}.ko-pad-play strong{font-size:18px}.ko-board-head{display:block}}
 
 html[data-app-mode=pads] #koMigrationInfo,html[data-app-mode=pads] #koSafeSummary[data-warning=no]{display:none}html[data-app-mode=pads] #koAppInfo{margin-bottom:8px}#koPadSetup>summary{cursor:pointer;padding:12px 0;min-height:44px;color:#c1cedd}.ko-scene-label{margin:8px 0}.ko-board-head .hint{margin:5px 0}#koStatus:empty{display:none}
+
+/* The handle alone captures touch gestures; the rest of the board keeps native scrolling/taps. */
+.ko-pad-card{position:relative;overflow:visible}.ko-pad-play{padding-right:48px}.ko-menu{border-radius:0 0 12px 12px}
+.ko-drag-handle{position:absolute;right:2px;top:2px;width:44px;min-height:56px;padding:4px;font-size:28px;line-height:1;border:0;border-left:1px solid #597b72;border-radius:0 8px 0 8px;background:#213e38;color:#d7f9ef;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;cursor:grab}
+.ko-drag-handle.ko-drag-arming{background:#466d67}.ko-dragging{opacity:.5;outline:3px solid #8dbfff}.ko-dragging .ko-drag-handle{cursor:grabbing}
+.ko-drop-before:before,.ko-drop-after:after{content:'';position:absolute;z-index:10;left:-6px;top:-8px;width:5px;height:calc(100% + 16px);border-radius:4px;background:#8dc6ff;box-shadow:0 0 0 2px #0b1726;pointer-events:none}
+.ko-drop-after:after{left:auto;right:-7px}.ko-drag-ghost{position:fixed;z-index:45;left:0;top:0;pointer-events:none;width:160px;max-height:110px;overflow:hidden;padding:14px 10px;border:2px solid #8dc6ff;border-radius:12px;background:#213e38ed;color:#fff;font-size:17px;font-weight:700;overflow-wrap:anywhere;box-shadow:0 6px 22px #0008;will-change:transform}

@@ -2,6 +2,7 @@
 'use strict';
 const $k=id=>document.getElementById(id),S=window.SoraSafe,D=window.KoedashiData,B=window.SoraEditorBridge,R=window.SoraRecordingSessions,store=new D.PadStore();
 const budget=(navigator.deviceMemory&&navigator.deviceMemory<=2?64:128)*1048576;
+let drag=null;
 let ready=false,busy=false,hydrating=false,mode='record',sceneId=null,editingPadId=null,layout={},scenes=[],pads=[],serial=Promise.resolve(),sceneReady=Promise.resolve();
 const buttons=new Map(),labels=new Map(),editStates=new Map();let latestEdit=null,lastKey=null,saveFailure=false,wasPlaying=false;
 const message=(text,error=false)=>{$k('koStatus').textContent=text;$k('koStatus').className=error?'hint rec-error':'hint';};
@@ -9,7 +10,7 @@ const problem=e=>e?.name==='QuotaExceededError'?'保存容量が不足してい�
 const markChanged=()=>R.backupChanged?.();
 function showSave(text,error=false){if(!error&&[...editStates.values()].includes('failed')){text='保存失敗（未保存のパッド編集があります。外部バックアップで回収してください）';error=true;}else if(!error&&text==='保存済み'&&[...editStates.values()].includes('saving'))text='保存中';saveFailure=error;$k('koSaveStatus').textContent='声出し：'+text;$k('koSaveStatus').className=error?'hint rec-error':'hint';}
 const player=new KoedashiPlayer({
- onReady(id,state,error){const button=buttons.get(id),label=labels.get(id);if(button)button.disabled=state!=='ready';if(label)label.textContent=state==='ready'?'再生可能':state==='loading'?'読み込み中…':'読込失敗：'+error;},
+ onReady(id,state,error){const button=buttons.get(id),label=labels.get(id);if(button)button.disabled=!!drag?.active||state!=='ready';if(label)label.textContent=state==='ready'?'再生可能':state==='loading'?'読み込み中…':'読込失敗：'+error;},
  onActive(id){for(const [key,button]of buttons){button.className='ko-pad-play'+(key===id?' playing':'');button.setAttribute('aria-pressed',String(key===id));}if(id){wasPlaying=true;message('再生中：'+(pads.find(p=>p.id===id)?.name||''));}else if(wasPlaying){wasPlaying=false;message('再生を停止しました。');}},
  onError:text=>message(text,true)
 },window,budget);
@@ -23,25 +24,28 @@ function stopAll(){player.stop();B.stopPreview();}
 function currentLayout(){return {mode,sceneId,editingPadId};}
 function applyMode(){document.documentElement.dataset.appMode=mode;$k('koPadScreen').hidden=mode!=='pads';$k('koEditEmpty').hidden=mode!=='edit'||B.hasData();for(const [id,value]of [['koModeRecord','record'],['koModeEdit','edit'],['koModePads','pads']])$k(id).setAttribute('aria-pressed',String(mode===value));$k('koPadEditing').hidden=mode!=='edit'||!editingPadId;}
 function refresh(){
- const locked=busy||!ready||R.isRecording()||B.isBusy();
+ const locked=busy||!!drag?.active||!ready||R.isRecording()||B.isBusy();
  for(const id of ['koSceneSelect','koSceneNew','koSceneRename','koSceneDelete','koSceneUp','koSceneDown','koFile','koRegister','koSavePad','koReloadAudio'])$k(id).disabled=locked;
  $k('koRegister').disabled=locked||!B.hasData();$k('koSavePad').disabled=locked||!editingPadId;
- for(const id of ['koModeRecord','koModeEdit','koModePads'])$k(id).disabled=busy||!ready||B.isBusy();
+ for(const id of ['koModeRecord','koModeEdit','koModePads'])$k(id).disabled=busy||!!drag?.active||!ready||B.isBusy();
  for(const el of $k('koPadGrid').querySelectorAll('.ko-menu button'))el.disabled=locked||el.dataset.edge==='yes';
+ for(const el of $k('koPadGrid').querySelectorAll('.ko-drag-handle'))el.disabled=(!drag?.active&&locked)||!drag?.supported||pads.filter(p=>p.sceneId===sceneId).length<2;
+ for(const [id,button]of buttons)button.disabled=!!drag?.active||player.states.get(id)?.state!=='ready';
  const i=scenes.findIndex(s=>s.id===sceneId);$k('koSceneUp').disabled=locked||i<=0;$k('koSceneDown').disabled=locked||i<0||i>=scenes.length-1;
  $k('koTargetScene').textContent='登録先：'+(scenes.find(s=>s.id===sceneId)?.name||'準備中');
 }
 async function reload(){const data=await store.layout();scenes=data.scenes;pads=data.pads;layout=data.layout;sceneId=scenes.some(s=>s.id===sceneId)?sceneId:layout.sceneId||scenes[0]?.id;render();}
 function render(){
+ drag?.cancel('一覧が更新されたため、並べ替えをキャンセルしました。');
  const select=$k('koSceneSelect');select.replaceChildren();for(const scene of scenes){const o=document.createElement('option');o.value=scene.id;o.textContent=scene.name;select.append(o);}select.value=sceneId||'';
  $k('koPadGrid').replaceChildren();buttons.clear();labels.clear();const group=pads.filter(p=>p.sceneId===sceneId).sort((a,b)=>a.order-b.order||a.id.localeCompare(b.id));
  $k('koPadEmpty').hidden=!!group.length;$k('koPadSetup').open=!group.length;
  for(const [i,pad]of group.entries()){
-  const card=document.createElement('article');card.className='ko-pad-card';
+  const card=document.createElement('article');card.className='ko-pad-card';card.dataset.padId=pad.id;
   const play=document.createElement('button');play.className='ko-pad-play';play.setAttribute('aria-label',pad.name+'を先頭から再生');play.setAttribute('aria-pressed','false');play.disabled=player.states.get(pad.id)?.state!=='ready';
   const title=document.createElement('strong');title.textContent=pad.name;const length=document.createElement('span'),pcm=pad.edit||pad.original;length.textContent=(pcm.frames/pcm.sr).toFixed(2)+' 秒';
   const state=document.createElement('small');const status=player.states.get(pad.id);state.textContent=status?.state==='ready'?'再生可能':status?.state==='failed'?'読込失敗：'+status.error:'準備待ち';
-  play.append(title,length,state);play.addEventListener('click',()=>{B.stopPreview();void player.play(pad.id);});buttons.set(pad.id,play);labels.set(pad.id,state);
+  play.append(title,length,state);play.addEventListener('click',()=>{if(drag?.active)return;B.stopPreview();void player.play(pad.id);});buttons.set(pad.id,play);labels.set(pad.id,state);
   const menu=document.createElement('details');menu.className='ko-menu';const summary=document.createElement('summary');summary.textContent='メニュー ⋯';summary.setAttribute('aria-label',pad.name+'のメニュー');menu.append(summary);
   function action(label,fn,disabled=false){const b=document.createElement('button');b.textContent=label;b.disabled=disabled;b.addEventListener('click',()=>{menu.open=false;fn();});menu.append(b);return b;}
   action('名前変更',()=>{stopAll();const name=window.prompt('パッド名',pad.name);if(name?.trim())void operation(async()=>{await store.rename('pads',pad.id,name);markChanged();if(editingPadId===pad.id)B.rename(name.trim().slice(0,80)+'.wav');});});
@@ -50,7 +54,8 @@ function render(){
   const down=action('後へ',()=>void operation(async()=>{await store.reorder('pads',pad.id,1);markChanged();}),i===group.length-1);down.dataset.edge=i===group.length-1?'yes':'no';
   action('登録時の音声に戻す',()=>{stopAll();if(window.confirm('「'+pad.name+'」のパッド編集を登録時に戻します。元の録音テイクは変更しません。'))void operation(async()=>{await queue.flush(pad.id).catch(()=>{});const p=await store.getPad(pad.id);await store.resetEdit(pad.id,p.revision);dropEdit(pad.id);markChanged();if(editingPadId===pad.id){editingPadId=null;B.setContext({type:'file',id:null});B.restore(null);latestEdit=null;}});});
   action('パッドを削除',()=>{stopAll();if(window.confirm('「'+pad.name+'」のパッド内音声を削除します。必要な外部バックアップは保存済みですか？元の録音テイクがある場合、そのテイクは削除しません。'))void operation(async()=>{await queue.flush(pad.id).catch(()=>{});await store.removePad(pad.id);dropEdit(pad.id);markChanged();if(editingPadId===pad.id){editingPadId=null;latestEdit=null;B.setContext({type:'file',id:null});B.restore(null);await store.saveLayout(currentLayout());}});});
-  card.append(play,menu);$k('koPadGrid').append(card);
+  const handle=document.createElement('button');handle.className='ko-drag-handle';handle.textContent='≡';handle.setAttribute('aria-label',pad.name+'を長押しして並べ替え');handle.setAttribute('aria-grabbed','false');handle.title='長押しして移動（メニューの前へ・後へも利用できます）';
+  card.append(play,handle,menu);$k('koPadGrid').append(card);
  }
  applyMode();refresh();for(const b of $k('koPadGrid').querySelectorAll('button[data-edge="yes"]'))b.disabled=true;
 }
@@ -123,6 +128,15 @@ $k('koSceneRename').addEventListener('click',()=>{stopAll();const name=window.pr
 for(const [id,direction]of [['koSceneUp',-1],['koSceneDown',1]])$k(id).addEventListener('click',()=>{void operation(async()=>{await store.reorder('scenes',sceneId,direction);markChanged();});});
 $k('koSceneDelete').addEventListener('click',()=>{stopAll();if(window.confirm('このシーンと含まれるパッドを削除します。元の録音テイクは削除しません。必要なら先にバックアップを保存してください。'))void operation(async()=>{await queue.flushAll();const ids=pads.filter(p=>p.sceneId===sceneId).map(p=>p.id);sceneId=await store.removeScene(sceneId);for(const id of ids)dropEdit(id);if(ids.includes(editingPadId)){editingPadId=null;latestEdit=null;B.setContext({type:'file',id:null});B.restore(null);}markChanged();});});
 $k('koBackup').addEventListener('click',()=>{void modeTo('record').then(()=>{document.getElementById('safeAdvanced').open=true;document.getElementById('safeMakeBackup').scrollIntoView({block:'center'});});});
+drag=new KoedashiPadDrag($k('koPadGrid'),{
+ key:()=>sceneId,
+ canStart:()=>ready&&!busy&&!R.isRecording()&&!B.isBusy()&&mode==='pads',
+ bounds:()=>({top:Math.max(0,$k('koModes').getBoundingClientRect().bottom),bottom:Math.min(innerHeight,$k('koPadStop').getBoundingClientRect().top)}),
+ onBegin(){stopAll();refresh();message('並べ替え中：青い線の位置へ挿入します。指を離すと保存。取り消しは別の指で「全停止」／Esc。');},
+ onEnd:refresh,
+ onCancel:text=>message(text+' 保存前の順序は保持しています。'),
+ onCommit:(id,ids,expected)=>void operation(async()=>{if(await store.reorderPads(id,ids,expected))markChanged();message('パッドの並び順を保存しました。');},{prepare:false})
+});
 B.onChange(state=>{padEditChanged(state);refresh();});
 B.onContext((next,state)=>{if(next.type==='pad'&&!hydrating&&state){editingPadId=next.id;latestEdit=state;lastKey=[state.data,state.a,state.b,state.pos,state.zoom,state.marks.join(',')];mode='edit';applyMode();}if(editingPadId&&next.type!=='pad'){padEditChanged(state);editingPadId=null;latestEdit=null;lastKey=null;}if(next.type==='take'&&ready&&!busy){mode='edit';applyMode();void store.saveLayout(currentLayout()).catch(e=>showSave('保存失敗：'+problem(e),true));}refresh();});
 for(const type of ['visibilitychange','pagehide']){const target=type==='visibilitychange'?document:window;target.addEventListener(type,()=>{if(type==='pagehide'||document.hidden){stopAll();if(editingPadId)padEditChanged(B.capture());void queue.flushAll().catch(()=>{});}});}
