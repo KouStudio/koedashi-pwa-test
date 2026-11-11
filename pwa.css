@@ -1,0 +1,11 @@
+/* PWA additions only. The original editor stylesheet is unchanged. */
+.pwa-install{margin:0 0 18px;font-size:12px;color:#8795a9}
+.pwa-install summary{cursor:pointer;padding:12px 0;min-height:44px;color:#aab5c6}
+.pwa-install button[hidden],.pwa-install details[hidden]{display:none}
+#pwaStatus:empty{display:none}
+body{min-height:100vh;min-height:100dvh}
+header{padding-top:max(26px,env(safe-area-inset-top,0px));padding-left:max(24px,env(safe-area-inset-left,0px));padding-right:max(24px,env(safe-area-inset-right,0px))}
+main{padding-left:max(24px,env(safe-area-inset-left,0px));padding-right:max(24px,env(safe-area-inset-right,0px));padding-bottom:calc(110px + env(safe-area-inset-bottom,0px))}
+#dock{padding-left:max(12px,env(safe-area-inset-left,0px));padding-right:max(12px,env(safe-area-inset-right,0px))}
+@media(max-width:600px){header{padding-top:max(18px,env(safe-area-inset-top,0px));padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}main{padding-left:max(14px,env(safe-area-inset-left,0px));padding-right:max(14px,env(safe-area-inset-right,0px))}}
+@media(display-mode:standalone){.pwa-install #installApp,.pwa-install #installHelp{display:none}}
