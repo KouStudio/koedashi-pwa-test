@@ -1,6 +1,7 @@
 (function(){
 'use strict';
 const $k=id=>document.getElementById(id),S=window.SoraSafe,D=window.KoedashiData,B=window.SoraEditorBridge,R=window.SoraRecordingSessions,store=new D.PadStore();
+const V=window.KoedashiVolume,volumeOpen=new Set();
 const budget=(navigator.deviceMemory&&navigator.deviceMemory<=2?64:128)*1048576;
 let drag=null;
 let ready=false,busy=false,hydrating=false,mode='record',sceneId=null,editingPadId=null,layout={},scenes=[],pads=[],serial=Promise.resolve(),sceneReady=Promise.resolve();
@@ -8,12 +9,18 @@ const buttons=new Map(),labels=new Map(),editStates=new Map();let latestEdit=nul
 const message=(text,error=false)=>{$k('koStatus').textContent=text;$k('koStatus').className=error?'hint rec-error':'hint';};
 const problem=e=>e?.name==='QuotaExceededError'?'保存容量が不足しています。元音声を削除せず、外部バックアップを作成してください。':e?.message||String(e);
 const markChanged=()=>R.backupChanged?.();
-function showSave(text,error=false){if(!error&&[...editStates.values()].includes('failed')){text='保存失敗（未保存のパッド編集があります。外部バックアップで回収してください）';error=true;}else if(!error&&text==='保存済み'&&[...editStates.values()].includes('saving'))text='保存中';saveFailure=error;$k('koSaveStatus').textContent='声出し：'+text;$k('koSaveStatus').className=error?'hint rec-error':'hint';}
+function showSave(text,error=false){if(!error&&volumes.failed()){text='保存失敗（未保存のパッド音量があります。音量欄から再試行／外部バックアップで回収してください）';error=true;}else if(!error&&[...editStates.values()].includes('failed')){text='保存失敗（未保存のパッド編集があります。外部バックアップで回収してください）';error=true;}else if(!error&&text==='保存済み'&&([...editStates.values()].includes('saving')||volumes.busy()))text='保存中';saveFailure=error;$k('koSaveStatus').textContent='声出し：'+text;$k('koSaveStatus').className=error?'hint rec-error':'hint';}
 const player=new KoedashiPlayer({
  onReady(id,state,error){const button=buttons.get(id),label=labels.get(id);if(button)button.disabled=!!drag?.active||state!=='ready';if(label)label.textContent=state==='ready'?'再生可能':state==='loading'?'読み込み中…':'読込失敗：'+error;},
  onActive(id){for(const [key,button]of buttons){button.className='ko-pad-play'+(key===id?' playing':'');button.setAttribute('aria-pressed',String(key===id));}if(id){wasPlaying=true;message('再生中：'+(pads.find(p=>p.id===id)?.name||''));}else if(wasPlaying){wasPlaying=false;message('再生を停止しました。');}},
  onError:text=>message(text,true)
 },window,budget);
+const volumeWidgets=new Map();
+const volumes=new V.Queue(store,(id,state,error)=>{
+ const widget=volumeWidgets.get(id);if(widget)widget.retry.hidden=state!=='failed';if(widget)widget.status.textContent=state==='saving'?'音量保存中…':state==='saved'?'音量保存済み':'音量保存失敗：'+problem(error)+' 再試行またはバックアップしてください。';
+ showSave(state==='saving'?'保存中':state==='saved'?'保存済み':'音量保存失敗：'+problem(error),state==='failed');
+ if(error)message('音量保存失敗：'+problem(error)+' 現在の再生には反映していますが、再起動で戻る可能性があります。',true);
+});
 const queue=new S.EditQueue(store,D.Codec.pack,(id,state,error,revision)=>{
  editStates.set(id,state);
  if(revision!==undefined){const p=pads.find(p=>p.id===id);if(p)p.revision=revision;}
@@ -31,14 +38,15 @@ function refresh(){
  for(const el of $k('koPadGrid').querySelectorAll('.ko-menu button'))el.disabled=locked||el.dataset.edge==='yes';
  for(const el of $k('koPadGrid').querySelectorAll('.ko-drag-handle'))el.disabled=(!drag?.active&&locked)||!drag?.supported||pads.filter(p=>p.sceneId===sceneId).length<2;
  for(const [id,button]of buttons)button.disabled=!!drag?.active||player.states.get(id)?.state!=='ready';
+ for(const el of $k('koPadGrid').querySelectorAll('.ko-volume input,.ko-volume button'))el.disabled=locked;
  const i=scenes.findIndex(s=>s.id===sceneId);$k('koSceneUp').disabled=locked||i<=0;$k('koSceneDown').disabled=locked||i<0||i>=scenes.length-1;
  $k('koTargetScene').textContent='登録先：'+(scenes.find(s=>s.id===sceneId)?.name||'準備中');
 }
-async function reload(){const data=await store.layout();scenes=data.scenes;pads=data.pads;layout=data.layout;sceneId=scenes.some(s=>s.id===sceneId)?sceneId:layout.sceneId||scenes[0]?.id;render();}
+async function reload(){const data=await store.layout();scenes=data.scenes;pads=data.pads;for(const pad of pads){const pending=volumes.pending(pad.id);if(pending!==undefined)pad.volume=pending;}layout=data.layout;sceneId=scenes.some(s=>s.id===sceneId)?sceneId:layout.sceneId||scenes[0]?.id;render();}
 function render(){
  drag?.cancel('一覧が更新されたため、並べ替えをキャンセルしました。');
  const select=$k('koSceneSelect');select.replaceChildren();for(const scene of scenes){const o=document.createElement('option');o.value=scene.id;o.textContent=scene.name;select.append(o);}select.value=sceneId||'';
- $k('koPadGrid').replaceChildren();buttons.clear();labels.clear();const group=pads.filter(p=>p.sceneId===sceneId).sort((a,b)=>a.order-b.order||a.id.localeCompare(b.id));
+ $k('koPadGrid').replaceChildren();buttons.clear();labels.clear();volumeWidgets.clear();const group=pads.filter(p=>p.sceneId===sceneId).sort((a,b)=>a.order-b.order||a.id.localeCompare(b.id));
  $k('koPadEmpty').hidden=!!group.length;$k('koPadSetup').open=!group.length;
  for(const [i,pad]of group.entries()){
   const card=document.createElement('article');card.className='ko-pad-card';card.dataset.padId=pad.id;
@@ -53,11 +61,27 @@ function render(){
   const up=action('前へ',()=>void operation(async()=>{await store.reorder('pads',pad.id,-1);markChanged();}),i===0);up.dataset.edge=i===0?'yes':'no';
   const down=action('後へ',()=>void operation(async()=>{await store.reorder('pads',pad.id,1);markChanged();}),i===group.length-1);down.dataset.edge=i===group.length-1?'yes':'no';
   action('登録時の音声に戻す',()=>{stopAll();if(window.confirm('「'+pad.name+'」のパッド編集を登録時に戻します。元の録音テイクは変更しません。'))void operation(async()=>{await queue.flush(pad.id).catch(()=>{});const p=await store.getPad(pad.id);await store.resetEdit(pad.id,p.revision);dropEdit(pad.id);markChanged();if(editingPadId===pad.id){editingPadId=null;B.setContext({type:'file',id:null});B.restore(null);latestEdit=null;}});});
-  action('パッドを削除',()=>{stopAll();if(window.confirm('「'+pad.name+'」のパッド内音声を削除します。必要な外部バックアップは保存済みですか？元の録音テイクがある場合、そのテイクは削除しません。'))void operation(async()=>{await queue.flush(pad.id).catch(()=>{});await store.removePad(pad.id);dropEdit(pad.id);markChanged();if(editingPadId===pad.id){editingPadId=null;latestEdit=null;B.setContext({type:'file',id:null});B.restore(null);await store.saveLayout(currentLayout());}});});
+  action('パッドを削除',()=>{stopAll();if(window.confirm('「'+pad.name+'」のパッド内音声を削除します。必要な外部バックアップは保存済みですか？元の録音テイクがある場合、そのテイクは削除しません。'))void operation(async()=>{await queue.flush(pad.id).catch(()=>{});await volumes.flush(pad.id).catch(()=>{});await store.removePad(pad.id);volumes.drop(pad.id);dropEdit(pad.id);markChanged();if(editingPadId===pad.id){editingPadId=null;latestEdit=null;B.setContext({type:'file',id:null});B.restore(null);await store.saveLayout(currentLayout());}});});
   const handle=document.createElement('button');handle.className='ko-drag-handle';handle.textContent='≡';handle.setAttribute('aria-label',pad.name+'を長押しして並べ替え');handle.setAttribute('aria-grabbed','false');handle.title='長押しして移動（メニューの前へ・後へも利用できます）';
-  card.append(play,handle,menu);$k('koPadGrid').append(card);
+  card.append(play,handle,volumeControl(pad),menu);$k('koPadGrid').append(card);
  }
  applyMode();refresh();for(const b of $k('koPadGrid').querySelectorAll('button[data-edge="yes"]'))b.disabled=true;
+}
+function volumeControl(pad){
+ const box=document.createElement('details');box.className='ko-volume';box.open=volumeOpen.has(pad.id);
+ const icon=document.createElement('summary');icon.textContent='🔊';icon.setAttribute('aria-label',pad.name+'の音量');icon.title='このパッドの再生音量';box.append(icon);
+ box.addEventListener('toggle',()=>{if(box.open)volumeOpen.add(pad.id);else volumeOpen.delete(pad.id);});
+ const panel=document.createElement('div');panel.className='ko-volume-panel';
+ const label=document.createElement('label');label.textContent='再生音量 ';const output=document.createElement('output');
+ const slider=document.createElement('input');slider.type='range';slider.min='0';slider.max='200';slider.step='10';slider.value=V.value(pad.volume);slider.setAttribute('aria-label',pad.name+'の再生音量');
+ function show(){const v=Number(slider.value);output.textContent=v+'%'+(v===0?'（無音）':'');slider.setAttribute('aria-valuetext',v+'%');icon.textContent=v===0?'🔇':'🔊';icon.setAttribute('aria-label',pad.name+'の音量 '+v+'%');}show();label.append(output,slider);
+ const reset=document.createElement('button');reset.textContent='100%に戻す';const retry=document.createElement('button');retry.textContent='音量保存を再試行';retry.hidden=!volumes.failed(pad.id);
+ const status=document.createElement('p');status.className='hint';status.setAttribute('role','status');status.textContent=volumes.failed(pad.id)?'音量未保存：再試行またはバックアップしてください。':volumes.pending(pad.id)!==undefined?'音量保存中…':'音量 '+V.value(pad.volume)+'%（ブラウザ内の設定）';
+ const note=document.createElement('p');note.className='hint';note.textContent='100%超はピーク保護。端末・スピーカーの最大出力は超えられません。';
+ const close=document.createElement('button');close.textContent='音量を閉じる';close.addEventListener('click',()=>box.open=false);
+ function change(){if(busy||drag?.active||R.isRecording()||B.isBusy())return;pad.volume=Number(slider.value);show();player.setVolume(pad.id,pad.volume);volumes.set(pad.id,pad.volume);markChanged();}
+ slider.addEventListener('input',change);slider.addEventListener('change',()=>{void volumes.flush(pad.id).catch(()=>{});});reset.addEventListener('click',()=>{slider.value=100;change();void volumes.flush(pad.id).catch(()=>{});});retry.addEventListener('click',()=>{void volumes.flush(pad.id).catch(()=>{});});
+ panel.append(label,reset,retry,status,note,close);box.append(panel);volumeWidgets.set(pad.id,{status,retry});return box;
 }
 function preload(){const group=pads.filter(p=>p.sceneId===sceneId);sceneReady=player.prepare(group,S.PCM.decodeData);return sceneReady;}
 async function operation(fn,{prepare=true}={}){
@@ -126,7 +150,7 @@ $k('koSceneSelect').addEventListener('change',e=>{const id=e.target.value;player
 $k('koSceneNew').addEventListener('click',()=>{stopAll();const name=window.prompt('新しいシーン名','シーン'+(scenes.length+1));if(name?.trim())void operation(async()=>{const scene=await store.createScene(name);markChanged();sceneId=scene.id;await store.saveLayout(currentLayout());});});
 $k('koSceneRename').addEventListener('click',()=>{stopAll();const name=window.prompt('シーン名',scenes.find(s=>s.id===sceneId)?.name||'');if(name?.trim())void operation(async()=>{await store.rename('scenes',sceneId,name);markChanged();});});
 for(const [id,direction]of [['koSceneUp',-1],['koSceneDown',1]])$k(id).addEventListener('click',()=>{void operation(async()=>{await store.reorder('scenes',sceneId,direction);markChanged();});});
-$k('koSceneDelete').addEventListener('click',()=>{stopAll();if(window.confirm('このシーンと含まれるパッドを削除します。元の録音テイクは削除しません。必要なら先にバックアップを保存してください。'))void operation(async()=>{await queue.flushAll();const ids=pads.filter(p=>p.sceneId===sceneId).map(p=>p.id);sceneId=await store.removeScene(sceneId);for(const id of ids)dropEdit(id);if(ids.includes(editingPadId)){editingPadId=null;latestEdit=null;B.setContext({type:'file',id:null});B.restore(null);}markChanged();});});
+$k('koSceneDelete').addEventListener('click',()=>{stopAll();if(window.confirm('このシーンと含まれるパッドを削除します。元の録音テイクは削除しません。必要なら先にバックアップを保存してください。'))void operation(async()=>{await queue.flushAll();const ids=pads.filter(p=>p.sceneId===sceneId).map(p=>p.id);sceneId=await store.removeScene(sceneId);for(const id of ids){volumes.drop(id);dropEdit(id);}if(ids.includes(editingPadId)){editingPadId=null;latestEdit=null;B.setContext({type:'file',id:null});B.restore(null);}markChanged();});});
 $k('koBackup').addEventListener('click',()=>{void modeTo('record').then(()=>{document.getElementById('safeAdvanced').open=true;document.getElementById('safeMakeBackup').scrollIntoView({block:'center'});});});
 drag=new KoedashiPadDrag($k('koPadGrid'),{
  key:()=>sceneId,
@@ -139,15 +163,15 @@ drag=new KoedashiPadDrag($k('koPadGrid'),{
 });
 B.onChange(state=>{padEditChanged(state);refresh();});
 B.onContext((next,state)=>{if(next.type==='pad'&&!hydrating&&state){editingPadId=next.id;latestEdit=state;lastKey=[state.data,state.a,state.b,state.pos,state.zoom,state.marks.join(',')];mode='edit';applyMode();}if(editingPadId&&next.type!=='pad'){padEditChanged(state);editingPadId=null;latestEdit=null;lastKey=null;}if(next.type==='take'&&ready&&!busy){mode='edit';applyMode();void store.saveLayout(currentLayout()).catch(e=>showSave('保存失敗：'+problem(e),true));}refresh();});
-for(const type of ['visibilitychange','pagehide']){const target=type==='visibilitychange'?document:window;target.addEventListener(type,()=>{if(type==='pagehide'||document.hidden){stopAll();if(editingPadId)padEditChanged(B.capture());void queue.flushAll().catch(()=>{});}});}
-window.addEventListener('beforeunload',e=>{if(busy||queue.busy()||saveFailure){e.preventDefault();e.returnValue='';}});
+for(const type of ['visibilitychange','pagehide']){const target=type==='visibilitychange'?document:window;target.addEventListener(type,()=>{if(type==='pagehide'||document.hidden){stopAll();if(editingPadId)padEditChanged(B.capture());void queue.flushAll().catch(()=>{});void volumes.flushAll().catch(()=>{});}});}
+window.addEventListener('beforeunload',e=>{if(busy||queue.busy()||volumes.busy()||volumes.failed()||saveFailure){e.preventDefault();e.returnValue='';}});
 window.KoedashiPads={
  stopAll,registerTake,registerCurrent,checkpoint(){if(editingPadId)padEditChanged(B.capture());},
  showEditor(){if(ready&&!busy){mode='edit';applyMode();void store.saveLayout(currentLayout()).catch(e=>showSave('保存失敗：'+problem(e),true));}},
  hasData:()=>scenes.length>0||pads.length>0,
  safeStatusChanged(text){$k('koSafeSummary').textContent='録音保存：'+text;$k('koSafeSummary').dataset.warning=/保存失敗|保存中|不整合|確認要/.test(text)?'yes':'no';},
- async backupSnapshot(){await serial;if(editingPadId)padEditChanged(B.capture());await queue.flushAll().catch(()=>{});const snapshot=await store.layout();snapshot.layout=currentLayout();for(const pad of snapshot.pads){const pending=queue.pending(pad.id);if(pending)pad.edit=await D.Codec.pack(pending);}return snapshot;},
- async beforeImport(){if(busy)throw Error('声出しの保存処理が終わるまでお待ちください。');stopAll();busy=true;refresh();try{if(editingPadId)padEditChanged(B.capture());await queue.flushAll();}catch(e){busy=false;refresh();throw e;}},
+ async backupSnapshot(){await serial;if(editingPadId)padEditChanged(B.capture());await queue.flushAll().catch(()=>{});await volumes.flushAll().catch(()=>{});const snapshot=await store.layout();snapshot.layout=currentLayout();for(const pad of snapshot.pads){const level=volumes.pending(pad.id);if(level!==undefined)pad.volume=level;const pending=queue.pending(pad.id);if(pending)pad.edit=await D.Codec.pack(pending);}return snapshot;},
+ async beforeImport(){if(busy)throw Error('声出しの保存処理が終わるまでお待ちください。');stopAll();busy=true;refresh();try{if(editingPadId)padEditChanged(B.capture());await queue.flushAll();await volumes.flushAll();}catch(e){busy=false;refresh();throw e;}},
  async afterImport(success,{legacyEdit=false}={}){
   stopAll();try{
    if(success){await reload();layout=(await store.layout()).layout;mode=legacyEdit?'edit':layout.mode||'record';sceneId=layout.sceneId||scenes[0]?.id;render();if(mode==='edit'&&layout.editingPadId){busy=false;await editPad(layout.editingPadId);}else if(mode==='pads')await preload();}
@@ -157,7 +181,7 @@ window.KoedashiPads={
 };
 async function boot(){
  try{
-  await R.ready;await store.open();await store.ensureScene();const data=await store.layout();scenes=data.scenes;pads=data.pads;layout=data.layout;sceneId=layout.sceneId||scenes[0].id;mode=layout.mode||'record';ready=true;
+  await R.ready;await store.open();await store.ensureScene();const data=await store.layout();scenes=data.scenes;pads=data.pads;for(const pad of pads){const pending=volumes.pending(pad.id);if(pending!==undefined)pad.volume=pending;}layout=data.layout;sceneId=layout.sceneId||scenes[0].id;mode=layout.mode||'record';ready=true;
   const migration=R.migration?.();$k('koMigrationInfo').textContent=migration?.copied?'旧SAFEから'+migration.count+'テイクをコピーしました。旧保存領域は変更していません。以後の変更は別保存です。':migration?.note?.includes('新領域')?'旧SAFEデータは保持しています。新領域に録音があるため自動コピーせず、旧側のバックアップからの追加復元が必要です。':'旧SAFEの別URL・別ブラウザにある録音は自動共有されません。必要ならバックアップから復元してください。';
   render();showSave('保存済み');window.KoedashiPads.safeStatusChanged($k('safeSaveStatus').textContent);
   if(mode==='edit'&&layout.editingPadId)await editPad(layout.editingPadId);else if(mode==='pads')await preload();R.refresh();

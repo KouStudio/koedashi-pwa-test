@@ -1,0 +1,13 @@
+/* Small visible grips; independent 44×48px touch targets, staggered vertically. */
+#selection{border:0}
+#selection:before{content:'';position:absolute;inset:0;border-left:2px solid #70e1c1;border-right:2px solid #f2c17c;pointer-events:none}
+#selection button,#selection button:hover,.apple-touch #selection button{width:44px;height:48px;min-height:48px;padding:0;border:0;background:transparent;color:transparent;right:auto;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;box-shadow:none}
+#selection #left,.apple-touch #selection #left{top:0;bottom:auto}#selection #right,.apple-touch #selection #right{top:auto;bottom:0}
+#selection button:before{content:'';position:absolute;top:12px;left:var(--precision-mark,20px);width:5px;height:24px;border-radius:4px;background:#70e1c1;box-shadow:0 0 0 1px #0b2028}
+#selection #right:before{background:#f2c17c}#selection button[aria-pressed=true]:before{box-shadow:0 0 0 2px #e4f7ff}
+#selection button:focus-visible{outline:2px solid #b7dfff;outline-offset:-2px}
+.precision-controls{border:1px solid #354152;border-radius:10px;padding:10px;margin:10px 0 14px;background:#151d28}
+.precision-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.precision-targets{display:flex;gap:6px;flex:1}.precision-targets button{flex:1;min-width:76px;min-height:46px;padding:8px}
+.precision-targets [aria-pressed=true]{background:#70e1c1;color:#092920}.precision-step{min-width:52px;min-height:48px;font-size:25px;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.precision-step.precision-held{background:#70e1c1;color:#092920}#precisionReadout{display:block;margin:8px 0;font-size:14px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.precision-controls .hint{margin:4px 0;font-size:11px}
+.precision-step:active,#selection button:active{transform:none}

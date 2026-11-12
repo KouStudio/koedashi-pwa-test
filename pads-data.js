@@ -40,6 +40,10 @@ class PadStore extends S.Store{
    const records=new Map(group.map(p=>[p.id,p]));ids.forEach((id,order)=>{const p=records.get(id);if(p.order!==order)table.put({...p,order});});set(true);
   };});
  }
+ async setVolume(id,volume){
+  if(!Number.isInteger(volume)||volume<0||volume>200||volume%10)throw Error('音量の指定が不正です。');
+  return this.transaction(['pads'],'readwrite',(tx,set,abort)=>{const table=tx.objectStore('pads'),r=table.get(id);r.onsuccess=()=>{if(!r.result){abort(Error('音量を保存するパッドがありません。'));return;}table.put({...r.result,volume});set(volume);};});
+ }
  async createPad(sceneId,name,original,sourceTakeId=null){S.PCM.validate(original);if(original.mode!=='pcm')throw Error('登録音声のPCMがありません。');return this.transaction(['scenes','pads'],'readwrite',(tx,set,abort)=>{const scene=tx.objectStore('scenes').get(sceneId),all=tx.objectStore('pads').getAll();let n=0;const done=()=>{if(++n!==2)return;if(!scene.result){abort(Error('登録先シーンがありません。'));return;}const group=all.result.filter(p=>p.sceneId===sceneId);if(all.result.length>=256||group.length>=64){abort(Error('パッド数の目安（1シーン64・全体256）に達しています。'));return;}const value={id:uid(),sceneId,name:name.trim().slice(0,80)||'無題の音声',original,edit:null,revision:0,sourceTakeId,order:Math.max(-1,...group.map(p=>p.order))+1,created:Date.now()};tx.objectStore('pads').add(value);set(value);};scene.onsuccess=all.onsuccess=done;});}
  async getPad(id){return this.transaction(['pads'],'readonly',(tx,set)=>{const r=tx.objectStore('pads').get(id);r.onsuccess=()=>set(r.result);});}
  async saveEdit(id,edit,expected){S.PCM.validate(edit);return this.transaction(['pads'],'readwrite',(tx,set,abort)=>{const table=tx.objectStore('pads'),r=table.get(id);r.onsuccess=()=>{if(!r.result||r.result.revision!==expected){abort(Error('パッド編集が他の画面と競合しました。上書きせず停止しました。'));return;}r.result.edit=edit;r.result.revision++;table.put(r.result);set(r.result.revision);};});}
