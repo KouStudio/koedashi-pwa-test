@@ -1,0 +1,30 @@
+/* Display adapter only: the existing PadStore and PadPlayer own all audio/data. */
+(function(root){
+'use strict';
+const el=id=>document.getElementById(id);
+class PerformanceView{
+ constructor(actions){this.actions=actions;this.page=0;this.buttons=new Map();this.peaks=new WeakMap();this.waveToken=0;this.locked=true;this.modeName='pads';
+ this.views=['koSimpleWave','koLegacyWave'].map(id=>{const box=el(id);box.className='playback-wave';const name=document.createElement('strong'),canvas=document.createElement('canvas'),time=document.createElement('output');canvas.setAttribute('aria-label','再生波形と現在位置（表示専用）');box.append(name,canvas,time);return {name,canvas,time};});
+ el('koSimpleScene').onchange=e=>{actions.stop();this.page=0;actions.scene(e.target.value);};
+ for(const [id,d]of [['koPagePrev',-1],['koPageNext',1]])el(id).onclick=()=>{actions.stop();this.page+=d;this.render(this.scenes,this.pads,this.sceneId,this.player);};
+ this.active(null);const resize=()=>{document.documentElement.style.setProperty('--ko-vh',(root.visualViewport?.height||innerHeight)+'px');document.documentElement.classList.toggle('ko-short',(root.visualViewport?.height||innerHeight)<450);this.draw();};
+ root.addEventListener('resize',resize);root.visualViewport?.addEventListener('resize',resize);resize();
+ }
+ mode(mode){this.modeName=mode;el('koSimpleScreen').hidden=mode!=='simple';if(mode==='simple')scrollTo(0,0);}
+ lock(value){this.locked=value;el('koSimpleScene').disabled=value;for(const [id,b]of this.buttons)b.disabled=value||this.player?.states.get(id)?.state!=='ready';if(this.scenes)this.pages();}
+ pages(){el('koPagePrev').disabled=this.locked||this.page===0;el('koPageNext').disabled=this.locked||this.page>=this.count-1;el('koPageLabel').textContent=(this.page+1)+' / '+this.count;el('koSimplePages').hidden=this.count<=1;}
+ render(scenes,pads,sceneId,player){if(this.sceneId!==sceneId)this.page=0;Object.assign(this,{scenes,pads,sceneId,player});const group=pads.filter(p=>p.sceneId===sceneId).sort((a,b)=>a.order-b.order||a.id.localeCompare(b.id));this.count=Math.max(1,Math.ceil(group.length/16));this.page=Math.max(0,Math.min(this.page,this.count-1));const select=el('koSimpleScene');select.replaceChildren();for(const s of scenes){const o=new Option(s.name,s.id);select.add(o);}select.value=sceneId||'';
+ const grid=el('koSimpleGrid');grid.replaceChildren();this.buttons.clear();for(let i=0;i<16;i++){const pad=group[this.page*16+i],b=document.createElement('button');b.className='simple-pad';b.style.touchAction='manipulation';const n=document.createElement('small'),name=document.createElement('strong');n.textContent=String(this.page*16+i+1).padStart(2,'0');name.textContent=pad?.name||'未登録';b.append(n,name);if(pad){b.dataset.simplePadId=pad.id;b.title=pad.name;b.setAttribute('aria-label',pad.name+'を先頭から再生');b.setAttribute('aria-pressed',String(player.active===pad.id));b.classList.toggle('simple-active',player.active===pad.id);b.onclick=()=>actionsPlay(this,pad.id);b.oncontextmenu=e=>e.preventDefault();this.buttons.set(pad.id,b);this.ready(pad.id,player.states.get(pad.id)?.state||'loading');}else{b.disabled=true;b.classList.add('empty');}grid.append(b);}this.lock(this.locked);
+ }
+ ready(id,state,error){const b=this.buttons.get(id);if(b){b.disabled=this.locked||state!=='ready';b.dataset.state=state;const number=b.querySelector('small');number.textContent=number.textContent.replace(/ · .*$/,'')+(state==='ready'?'':state==='failed'?' · 読込失敗':' · 読込中');b.title=(this.pads?.find(p=>p.id===id)?.name||'')+' / '+(state==='ready'?'再生可能':state==='failed'?'読込失敗：'+error:'読込中');}}
+ active(id,player,pads){el('koSimpleNotice').textContent='タブ・シーン・ページ切替で停止します。編集は「声出し」で。';el('koSimpleNotice').setAttribute('role','status');this.waveToken++;cancelAnimationFrame(this.raf);this.player=player||this.player;this.id=id;this.buffer=id?player.cache.get(id):null;this.position=0;for(const [key,b]of this.buttons){b.classList.toggle('simple-active',key===id);b.setAttribute('aria-pressed',String(key===id));}for(const v of this.views)v.name.textContent=id?(pads.find(p=>p.id===id)?.name||'再生中'):'停止中';this.draw();if(!id)return;
+ const buffer=this.buffer,token=this.waveToken;
+ // Bounded sampling and task yielding; never block source.start or require a waveform to play.
+ if(!this.peaks.has(buffer)){const peaks=new Float32Array(256);let bin=0;const build=()=>{if(token!==this.waveToken)return;try{const data=buffer.getChannelData(0);for(let stop=Math.min(256,bin+16);bin<stop;bin++){const a=Math.floor(bin*data.length/256),end=Math.floor((bin+1)*data.length/256),step=Math.max(1,Math.ceil((end-a)/256));let peak=0;for(let j=a;j<end;j+=step)peak=Math.max(peak,Math.abs(data[j]));peaks[bin]=peak;}if(bin<256)setTimeout(build,0);else{this.peaks.set(buffer,peaks);this.draw();}}catch{for(const v of this.views)v.canvas.setAttribute('aria-label','波形を生成できません。音声の再生は継続します。');}};setTimeout(build,0);}
+ const tick=()=>{if(token!==this.waveToken||player.active!==id)return;this.position=Math.min(buffer.duration,Math.max(0,player.context.currentTime-player.startedAt));this.draw();this.raf=requestAnimationFrame(tick);};this.raf=requestAnimationFrame(tick);
+ }
+ draw(){for(const v of this.views){const duration=this.buffer?.duration||0;v.time.textContent=(this.position||0).toFixed(2)+' / '+duration.toFixed(2)+' 秒';if(!v.canvas.getClientRects().length)continue;const w=Math.max(1,Math.round(v.canvas.clientWidth)),h=Math.max(1,Math.round(v.canvas.clientHeight));if(v.canvas.width!==w||v.canvas.height!==h){v.canvas.width=w;v.canvas.height=h;}const c=v.canvas.getContext('2d');c.clearRect(0,0,w,h);c.fillStyle='#102b29';c.fillRect(0,0,w,h);const peaks=this.buffer&&this.peaks.get(this.buffer);c.strokeStyle='#74d9bf';c.beginPath();if(peaks)for(let i=0;i<peaks.length;i++){const x=i*w/peaks.length,y=Math.max(1,peaks[i]*h*.46);c.moveTo(x,h/2-y);c.lineTo(x,h/2+y);}else{c.moveTo(0,h/2);c.lineTo(w,h/2);}c.stroke();if(this.id){const x=Math.min(w-1,(this.position||0)/duration*w);c.fillStyle='#ffe093';c.fillRect(x,0,2,h);}}}
+}
+function actionsPlay(view,id){if(!view.locked)view.actions.play(id);}
+root.KoedashiPerformance=PerformanceView;
+})(window);

@@ -35,7 +35,7 @@ class PadPlayer{
   try{
    const ac=await this.arm();if(token!==this.token)return false;
    const source=ac.createBufferSource();source.buffer=buffer;const voice=V.graph(ac,this.volumes.get(id)??100);source.connect(voice.input);this.voice=voice;source.onended=()=>{if(this.source===source){this.source=null;this.active=null;voice.dispose();this.voice=null;source.disconnect();this.emit('onActive',null);}};
-   this.source=source;this.active=id;source.start(0);this.emit('onActive',id);return true;
+   this.source=source;this.active=id;this.startedAt=ac.currentTime;source.start(0);this.emit('onActive',id);return true;
   }catch(e){this.stop();this.emit('onError','再生できませんでした：'+(e.message||String(e)));return false;}
  }
  cancelPreparation(){++this.generation;this.stop();this.cache.clear();this.bytes=0;}
