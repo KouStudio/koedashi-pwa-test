@@ -1,6 +1,6 @@
 'use strict';
 // Bump VERSION for every shell change. Do not add APIs, licenses or media here.
-const VERSION = 'koedashi-v2.4.0';
+const VERSION = 'koedashi-v2.4.1-handles';
 const PREFIX = 'sora-audio-shell:' + encodeURIComponent(self.registration.scope) + ':';
 const CACHE = PREFIX + VERSION;
 const SHELL = [
