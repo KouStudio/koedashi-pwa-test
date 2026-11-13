@@ -29,17 +29,17 @@ function render(){
  if(!data)return;
  if(!typing){byId('start').value=fmt(a);byId('end').value=fmt(b);}
  const view=byId('scroll').getBoundingClientRect(),base=lineX('start');
- const clamp=x=>Math.max(view.left+1,Math.min(view.right-45,x-22));
- let startLeft=clamp(base),endLeft=clamp(lineX('end'));
- // Keep both bottom targets independently touchable, including coincident boundaries.
- if(base>=view.left-1&&lineX('end')<=view.right+1&&endLeft-startLeft<48){
-  startLeft=Math.max(view.left+1,Math.min(view.right-93,(base+lineX('end'))/2-46));endLeft=startLeft+48;
- }
+ // Visible grips stay on their true boundary. Only invisible hit areas extend outward.
+ const edgeLeft=view.left+1,edgeRight=view.right-45;
+ const startLeft=Math.max(edgeLeft,Math.min(edgeRight,base-44));
+ const endLeft=Math.max(edgeLeft,Math.min(edgeRight,lineX('end')));
+ const stacked=base>=view.left-1&&lineX('end')<=view.right+1&&endLeft-startLeft<44;
+ byId('selection').classList.toggle('handles-stacked',stacked);byId('track').classList.toggle('handles-edge',stacked);
  for(const [id,t]of [['left','start'],['right','end']]){
   const node=byId(id),x=lineX(t),visible=x>=view.left-1&&x<=view.right+1;
   node.disabled=!enabled;node.style.visibility=visible?'visible':'hidden';node.setAttribute('aria-label',(t==='start'?'選択開始':'選択終了')+'ハンドル '+fmt(t==='start'?a:b)+'秒');
   node.setAttribute('aria-pressed',String(target===t));
-  const left=t==='start'?startLeft:endLeft;node.style.left=(left-base)+'px';node.style.setProperty('--precision-mark',Math.max(0,Math.min(42,x-left-2))+'px');
+  const left=t==='start'?startLeft:endLeft;node.style.left=(left-base)+'px';node.style.setProperty('--precision-mark',(x-left+(t==='start'?(x<view.left+6?0:-5):(x>view.right-6?-5:0)))+'px');node.style.zIndex=target===t?'4':'3';
  }
 }
 function rangeOnly(){const dur=duration();byId('selection').style.left=a/dur*100+'%';byId('selection').style.width=(b-a)/dur*100+'%';render();}

@@ -1,0 +1,1 @@
+#nearWaveActions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:8px 0}#nearWaveActions button{min-width:0;min-height:44px;font-size:12px;padding:8px 3px;overflow-wrap:anywhere}#nearRegister{background:#24473e;border-color:#70e1c1}#nearRegisterTarget{margin:4px 0 10px;font-size:10px;line-height:1.5}#recCountdownStatus:empty{display:none}
