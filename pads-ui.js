@@ -11,6 +11,11 @@ const problem=e=>e?.name==='QuotaExceededError'?'保存容量が不足してい�
 const markChanged=()=>R.backupChanged?.();
 function showSave(text,error=false){if(!error&&volumes.failed()){text='保存失敗（未保存のパッド音量があります。音量欄から再試行／外部バックアップで回収してください）';error=true;}else if(!error&&[...editStates.values()].includes('failed')){text='保存失敗（未保存のパッド編集があります。外部バックアップで回収してください）';error=true;}else if(!error&&text==='保存済み'&&([...editStates.values()].includes('saving')||volumes.busy()))text='保存中';saveFailure=error;$k('koSaveStatus').textContent='声出し：'+text;$k('koSaveStatus').className=error?'hint rec-error':'hint';}
 const performanceView=new KoedashiPerformance({stop:()=>stopAll(),play:id=>{B.stopPreview();void player.play(id);},scene:id=>{$k('koSceneSelect').value=id;$k('koSceneSelect').dispatchEvent(new Event('change'));}});
+performanceView.actions.reorder=async(id,ids,expected)=>{
+ let saved=false;
+ await operation(async()=>{if(mode!=='simple'||sceneId!==id)throw Error('表示中のシーンが変わりました。');if(await store.reorderPads(id,ids,expected))markChanged();saved=true;},{prepare:false});
+ if(!saved)throw Error($k('koSaveStatus').textContent);return saveFailure?$k('koSaveStatus').textContent:'';
+};
 const player=new KoedashiPlayer({
  onReady(id,state,error){performanceView.ready(id,state,error);const button=buttons.get(id),label=labels.get(id);if(button)button.disabled=!!drag?.active||state!=='ready';if(label)label.textContent=state==='ready'?'再生可能':state==='loading'?'読み込み中…':'読込失敗：'+error;},
  onActive(id){performanceView.active(id,player,pads);for(const [key,button]of buttons){button.className='ko-pad-play'+(key===id?' playing':'');button.setAttribute('aria-pressed',String(key===id));}if(id){wasPlaying=true;message('再生中：'+(pads.find(p=>p.id===id)?.name||''));}else if(wasPlaying){wasPlaying=false;message('再生を停止しました。');}},
