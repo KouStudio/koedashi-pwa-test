@@ -1,13 +1,13 @@
 'use strict';
 // Bump VERSION for every shell change. Do not add APIs, licenses or media here.
-const VERSION = 'koedashi-v2.4.2-bottom-handles';
+const VERSION = 'koedashi-v2.5.0';
 const PREFIX = 'sora-audio-shell:' + encodeURIComponent(self.registration.scope) + ':';
 const CACHE = PREFIX + VERSION;
 const SHELL = [
   './', 'index.html', 'style.css', 'compat.js?v=ios-1',
   'engine.js?v=long-audio-1', 'app.js?v=ios-1',
   'pwa.css', 'pwa.js', 'manifest.webmanifest',
-  'recorder.css', 'editor-bridge.js', 'recorder-core.js', 'recorder-ui.js', 'safe-data.js', 'pads-data.js', 'pad-player.js', 'pads-ui.js', 'pads.css', 'take-export.js', 'pad-drag.js', 'pad-volume.js', 'selection-controls.js', 'selection-controls.css', 'performance-view.js', 'simple.css',
+  'recorder.css', 'editor-bridge.js', 'recorder-core.js', 'recorder-ui.js', 'safe-data.js', 'pads-data.js', 'pad-player.js', 'pads-ui.js', 'pads.css', 'take-export.js', 'pad-drag.js', 'pad-volume.js', 'selection-controls.js', 'selection-controls.css', 'quick-editor.js', 'quick-editor.css', 'performance-view.js', 'simple.css',
   'icons/icon-192.png', 'icons/icon-512.png',
   'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png'
 ].map(path => new URL(path, self.registration.scope).href);
