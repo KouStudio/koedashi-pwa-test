@@ -1,0 +1,32 @@
+/* Offline ZIP STORE container; original checksum-validated backup remains the payload. */
+(function(root){
+'use strict';
+const MAX=1073741824+4*1048576,chunk=1048576,encoder=new TextEncoder(),decoder=new TextDecoder('utf-8',{fatal:true});
+const table=Uint32Array.from({length:256},(_,n)=>{for(let i=0;i<8;i++)n=n&1?0xedb88320^(n>>>1):n>>>1;return n>>>0;});
+function fail(text){throw Error(text);}
+async function crc(blob){let value=0xffffffff;for(let at=0;at<blob.size;at+=chunk){const bytes=new Uint8Array(await blob.slice(at,at+chunk).arrayBuffer());for(const b of bytes)value=table[(value^b)&255]^(value>>>8);await new Promise(r=>setTimeout(r,0));}return (value^0xffffffff)>>>0;}
+function dateName(date=new Date()){const two=n=>String(n).padStart(2,'0');return 'KOEDASHI_'+date.getFullYear()+'-'+two(date.getMonth()+1)+'-'+two(date.getDate())+'_'+two(date.getHours())+'-'+two(date.getMinutes())+'.zip';}
+async function pack(backup,settings={countdown:false},name=dateName()){
+ if(backup.size>MAX-1048576)fail('音声セットが1GiBの目安を超えます。音声を分けるか、従来のバックアップ／個別WAV保存を利用してください。');
+ const date=new Date(),year=Math.max(1980,Math.min(2107,date.getFullYear())),dosDate=((year-1980)<<9)|((date.getMonth()+1)<<5)|date.getDate(),dosTime=(date.getHours()<<11)|(date.getMinutes()<<5)|Math.floor(date.getSeconds()/2);
+ const entries=[['manifest.json',new Blob([JSON.stringify({format:'KOEDASHI_AUDIO_SET',version:1,created:Date.now(),settings})],{type:'application/json'})],['audio-set.koedashi-backup',backup]],parts=[],central=[];let offset=0;
+ for(const [path,blob]of entries){const filename=encoder.encode(path),sum=await crc(blob),local=new Uint8Array(30+filename.length),v=new DataView(local.buffer);v.setUint32(0,0x04034b50,true);v.setUint16(4,20,true);v.setUint16(6,0x800,true);v.setUint16(10,dosTime,true);v.setUint16(12,dosDate,true);v.setUint32(14,sum,true);v.setUint32(18,blob.size,true);v.setUint32(22,blob.size,true);v.setUint16(26,filename.length,true);local.set(filename,30);parts.push(local,blob);
+ const c=new Uint8Array(46+filename.length),cv=new DataView(c.buffer);cv.setUint32(0,0x02014b50,true);cv.setUint16(4,20,true);cv.setUint16(6,20,true);cv.setUint16(8,0x800,true);cv.setUint16(12,dosTime,true);cv.setUint16(14,dosDate,true);cv.setUint32(16,sum,true);cv.setUint32(20,blob.size,true);cv.setUint32(24,blob.size,true);cv.setUint16(28,filename.length,true);cv.setUint32(42,offset,true);c.set(filename,46);central.push(c);offset+=local.length+blob.size;}
+ const size=central.reduce((n,c)=>n+c.length,0),end=new Uint8Array(22),ev=new DataView(end.buffer);ev.setUint32(0,0x06054b50,true);ev.setUint16(8,entries.length,true);ev.setUint16(10,entries.length,true);ev.setUint32(12,size,true);ev.setUint32(16,offset,true);
+ return new File([...parts,...central,end],name,{type:'application/zip'});
+}
+async function unpack(file){
+ if(file.size>MAX||file.size<22)fail('ZIPのサイズが不正、または1GiBの目安を超えています。既存データは変更していません。');
+ const end=new DataView(await file.slice(-22).arrayBuffer());if(end.getUint32(0,true)!==0x06054b50||end.getUint16(4,true)||end.getUint16(6,true)||end.getUint16(20,true))fail('KOEDASHIのZIP形式ではありません（分割・コメント付きZIPは未対応）。');
+ const count=end.getUint16(10,true),length=end.getUint32(12,true),offset=end.getUint32(16,true);if(count!==2||end.getUint16(8,true)!==2||length>4096||offset+length+22!==file.size)fail('ZIPの目次が不正です。');
+ const c=new Uint8Array(await file.slice(offset,offset+length).arrayBuffer()),v=new DataView(c.buffer),files=new Map();let at=0,localEnd=0;
+ for(let i=0;i<count;i++){if(at+46>c.length||v.getUint32(at,true)!==0x02014b50)fail('ZIPの目次が破損しています。');const flags=v.getUint16(at+8,true),method=v.getUint16(at+10,true),sum=v.getUint32(at+16,true),compressed=v.getUint32(at+20,true),size=v.getUint32(at+24,true),names=v.getUint16(at+28,true),extra=v.getUint16(at+30,true),comment=v.getUint16(at+32,true),disk=v.getUint16(at+34,true),local=v.getUint32(at+42,true);if(flags!==0x800||method!==0||extra||comment||disk||compressed!==size||size>MAX||local!==localEnd||at+46+names>c.length)fail('このZIPは非対応の圧縮・暗号化、または不正な構造です。KOEDASHIで作成したZIPをそのまま選択してください。');
+ const path=decoder.decode(c.slice(at+46,at+46+names));if(!['manifest.json','audio-set.koedashi-backup'].includes(path)||files.has(path)||(path==='manifest.json'&&size>65536))fail('ZIP内のファイル名・重複・サイズが不正です。');
+ const header=new DataView(await file.slice(local,local+30).arrayBuffer());if(header.byteLength!==30||header.getUint32(0,true)!==0x04034b50||header.getUint16(6,true)!==flags||header.getUint16(8,true)!==method||header.getUint32(14,true)!==sum||header.getUint32(18,true)!==size||header.getUint32(22,true)!==size||header.getUint16(26,true)!==names||header.getUint16(28,true))fail('ZIPのファイル情報が一致しません。');
+ const name=decoder.decode(new Uint8Array(await file.slice(local+30,local+30+names).arrayBuffer()));if(name!==path)fail('ZIPのファイル名が一致しません。');localEnd=local+30+names+size;if(localEnd>offset)fail('ZIP内の音声範囲が不正です。');const blob=file.slice(local+30+names,localEnd);if(await crc(blob)!==sum)fail('ZIPのチェックサムが一致しません。既存データは変更していません。');files.set(path,blob);at+=46+names;}
+ if(at!==c.length||localEnd!==offset||files.size!==2)fail('ZIPに余分なデータ、または不足があります。');let manifest;try{manifest=JSON.parse(await files.get('manifest.json').text());}catch{fail('ZIPの設定情報を読めません。');}if(!manifest||manifest.format!=='KOEDASHI_AUDIO_SET'||manifest.version!==1||typeof manifest.settings?.countdown!=='boolean')fail('KOEDASHI音声セットの版・設定が不正です。');return {backup:files.get('audio-set.koedashi-backup'),settings:manifest.settings};
+}
+async function parse(file){const bytes=new Uint8Array(await file.slice(0,4).arrayBuffer());if(bytes[0]===0x50&&bytes[1]===0x4b){const {backup,settings}=await unpack(file),parsed=await root.SoraSafe.parseBackup(backup);parsed.transferSettings={countdown:settings.countdown};return parsed;}if(/\.zip$/i.test(file.name||''))fail('正しいZIPファイルではありません。従来バックアップは元の拡張子で読み込んでください。');return root.SoraSafe.parseBackup(file);}
+function applySettings(settings){const check=root.document?.getElementById('recCountdown');if(check)check.checked=settings.countdown;try{root.localStorage.setItem('koedashi.recCountdown',String(settings.countdown));const status=root.document?.getElementById('recCountdownStatus');if(status)status.textContent='';return '';}catch{return 'カウントダウン設定はこの起動中のみ反映します（端末の設定保存を利用できません）。';}}
+const api={MAX,pack,unpack,parse,crc,dateName,applySettings};root.KoedashiTransfer=api;if(typeof module!=='undefined')module.exports=api;
+})(globalThis);

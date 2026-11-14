@@ -1,0 +1,17 @@
+/* Independent playback position. The existing playback engine and selection stay shared. */
+(function(){
+'use strict';
+const by=id=>document.getElementById(id),B=SoraEditorBridge,handle=by('playheadHandle');let g=null,pending=false,request=0;
+const enabled=()=>!!data&&!busy&&document.documentElement.dataset.appMode==='edit'&&!document.hidden;
+function seek(t){if(!enabled()||!Number.isFinite(t))return;KoedashiPads.stopAll();pos=Math.max(0,Math.min(duration(),Math.round(t*sr)/sr));if(isVideo)by('video').currentTime=pos;update();}
+function render(){const ready=enabled();handle.disabled=!ready;by('nearNormalPlay').disabled=!ready;by('nearNormalPlay').textContent=(playing||pending)?'■ 停止':'▶ 位置から再生';by('nearNormalPlay').setAttribute('aria-pressed',String(playing||pending));if(!data)return;const view=by('scroll').getBoundingClientRect(),track=by('track'),x=track.getBoundingClientRect().left+pos/duration()*track.clientWidth,left=Math.max(view.left+1,Math.min(view.right-45,x-22));handle.style.left=(left-x)+'px';handle.style.setProperty('--playhead-mark',(x-left-5)+'px');handle.style.visibility=x>=view.left&&x<=view.right?'visible':'hidden';handle.setAttribute('aria-valuemax',String(duration()));handle.setAttribute('aria-valuenow',String(pos));handle.setAttribute('aria-valuetext',pos.toFixed(3)+'秒');}
+function finish(cancel=false){const old=g;if(!old)return;g=null;try{if(handle.hasPointerCapture(old.id))handle.releasePointerCapture(old.id);}catch{}if(cancel&&data===old.data)seek(old.pos);}
+handle.onpointerdown=e=>{if(!enabled()||e.isPrimary===false||e.button!==0)return;e.preventDefault();e.stopPropagation();KoedashiPads.stopAll();finish();const x=by('track').getBoundingClientRect().left+pos/duration()*by('track').clientWidth;g={id:e.pointerId,data,pos,offset:e.clientX-x};try{handle.setPointerCapture(e.pointerId);}catch{g=null;}};
+handle.onpointermove=e=>{if(!g||g.id!==e.pointerId)return;e.preventDefault();e.stopPropagation();if(!enabled()||g.data!==data){finish();return;}seek((e.clientX-g.offset-by('track').getBoundingClientRect().left)/by('track').clientWidth*duration());};
+handle.onpointerup=e=>{if(!g||g.id!==e.pointerId)return;e.preventDefault();e.stopPropagation();if(enabled()&&g.data===data)seek((e.clientX-g.offset-by('track').getBoundingClientRect().left)/by('track').clientWidth*duration());finish();};handle.onpointercancel=()=>finish(true);handle.onlostpointercapture=()=>finish(true);handle.oncontextmenu=e=>e.preventDefault();
+handle.onkeydown=e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();seek(pos+(e.key==='ArrowLeft'?-.01:.01));}};
+document.addEventListener('pointerdown',e=>{if(g&&e.pointerId!==g.id)finish(true);},true);
+by('nearNormalPlay').onclick=async()=>{if(playing||pending){request++;B.stopPreview();render();return;}const token=++request;pending=true;KoedashiPads.stopAll();render();try{await play(false);if(token!==request)B.stopPreview();}finally{pending=false;render();}};
+for(const event of ['blur','pagehide','resize','orientationchange'])window.addEventListener(event,()=>finish(true));document.addEventListener('visibilitychange',()=>{if(document.hidden){request++;finish();}});B.onContext(()=>{request++;finish();});B.onChange(()=>{if(g&&g.data!==data)finish();render();});by('scroll').addEventListener('scroll',render,{passive:true});
+window.KoedashiPlayhead={seek,render};let lastPlaying;function tick(){if(enabled()&&(playing||playing!==lastPlaying))render();lastPlaying=playing;requestAnimationFrame(tick);}tick();
+})();

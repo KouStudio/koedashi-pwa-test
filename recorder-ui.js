@@ -185,8 +185,8 @@ async function erase(take){
 async function reloadList(){
  if(!ready)return;try{const list=await store.list();for(const row of list.takes){const current=takes.find(t=>t.id===row.id);if(current)Object.assign(current,row);else takes.push({...row,state:null});}render();}catch(e){storageError=explain(e);saveStatus();}
 }
-async function makeBackup(){
- if(unavailable())return;window.KoedashiPads?.checkpoint();stash();loading=true;bridge.lock(true);refresh();$r('safeBackupStatus').textContent='バックアップ作成中…';const version=generation;
+async function makeBackup({throwOnError=false}={}){
+ if(unavailable()){if(throwOnError)throw Error('録音・読込・保存処理を終えてから共有してください。');return;}window.KoedashiPads?.checkpoint();stash();loading=true;bridge.lock(true);refresh();$r('safeBackupStatus').textContent='バックアップ作成中…';const version=generation;
  try{
   await edits.flushAll().catch(()=>{});const rows=[];
   for(const take of takes){
@@ -202,22 +202,23 @@ async function makeBackup(){
   backupFile=new File([blob],'KOEDASHI_BACKUP_'+new Date().toISOString().replace(/[:.]/g,'-')+'.koedashi-backup',{type:blob.type});
   const link=$r('safeBackupLink');link.href=backupURL;link.download=backupFile.name;link.textContent='作成したバックアップを端末へ保存';link.hidden=false;
   $r('safeShareBackup').hidden=!AudioCompat.canShare(backupFile,navigator);
-  $r('safeBackupStatus').textContent='バックアップ作成済み（ファイル生成のみ。端末への保存完了は確認できません）';
- }catch(e){$r('safeBackupStatus').textContent='バックアップ未実施／作成失敗：'+explain(e);}
+  $r('safeBackupStatus').textContent='バックアップ作成済み（ファイル生成のみ。端末への保存完了は確認できません）';return backupFile;
+ }catch(e){$r('safeBackupStatus').textContent='バックアップ未実施／作成失敗：'+explain(e);if(throwOnError)throw e;}
  finally{loading=false;bridge.lock(false);forgetLive();render();}
 }
-async function importBackup(file){
- if(unavailable()||!file)return;stash();loading=true;bridge.lock(true);refresh();let restoredId=null,restorePadMode=false,committed=false,padPrepared=false,hasLayout=false;
+async function importBackup(file,{onState=()=>{},isCancelled=()=>false}={}){
+ if(unavailable()||!file)return {ok:false,message:'録音・読込・保存処理を終えてから復元してください。'};let result={ok:false};stash();loading=true;bridge.lock(true);refresh();let restoredId=null,restorePadMode=false,committed=false,padPrepared=false,hasLayout=false;
  try{
-  await edits.flushAll();await window.KoedashiPads?.beforeImport();padPrepared=!!window.KoedashiPads;const parsed=await S.parseBackup(file);hasLayout=!!parsed.layout;restorePadMode=!!parsed.layout?.editingPadId;
-  if(!window.confirm(parsed.rows.length+'テイク／'+(parsed.scenes?.length||0)+'シーン／'+(parsed.pads?.length||0)+'パッドを追加復元します。既存データは上書きしません。'))return;
-  const mapping=await store.importBackup(parsed);committed=true;restoredId=mapping.get(parsed.selected)||null;dirty();await reloadList();notice('バックアップの検証と追加保存が完了しました。各テイクとパッドの音声を確認してください。');
- }catch(e){notice('復元失敗：'+explain(e)+' 既存の原音を削除・上書きしていません。',true);}
+  await edits.flushAll();await window.KoedashiPads?.beforeImport();padPrepared=!!window.KoedashiPads;onState('ファイルと音声データを検証中…');const parsed=await (window.KoedashiTransfer?KoedashiTransfer.parse(file):S.parseBackup(file));hasLayout=!!parsed.layout;restorePadMode=!!parsed.layout?.editingPadId;if(isCancelled())return {cancelled:true};
+  if(!window.confirm(parsed.rows.length+'テイク／'+(parsed.scenes?.length||0)+'シーン／'+(parsed.pads?.length||0)+'パッドを追加復元します。既存データは上書きしません。同じファイルを再度取り込むと重複追加されます。'+(parsed.transferSettings?'カウントダウンを'+(parsed.transferSettings.countdown?'オン':'オフ')+'に切り替えます。':'')))return {cancelled:true};onState('検証済みデータを追加復元中…');
+  const mapping=await store.importBackup(parsed);committed=true;restoredId=mapping.get(parsed.selected)||null;dirty();await reloadList();const warning=parsed.transferSettings?KoedashiTransfer.applySettings(parsed.transferSettings):'';notice('バックアップの検証と追加保存が完了しました。各テイクとパッドの音声を確認してください。'+warning);result={ok:true,warning};
+ }catch(e){const message='復元失敗：'+explain(e)+' 既存の原音を削除・上書きしていません。';notice(message,true);result={ok:false,message};}
  finally{
   loading=false;bridge.lock(false);forgetLive();render();
   const restored=takes.find(t=>t.id===restoredId);if(committed&&!restorePadMode&&restored?.status==='complete')await choose(restored);
   if(padPrepared)await window.KoedashiPads.afterImport(committed,{legacyEdit:!hasLayout&&!!restoredId});
  }
+ return result;
 }
 $r('recStart').addEventListener('click',()=>start());$r('recStop').addEventListener('click',()=>recorder.stop());
 $r('recPause').addEventListener('click',()=>recorder.state==='paused'?recorder.resume():recorder.pause());$r('recSkip').addEventListener('click',()=>recorder.skipCountdown());
@@ -248,7 +249,7 @@ const bootPromise=boot();
 window.SoraRecordingSessions={ready:bootPromise,isReady:()=>ready,isRecording:()=>recorder.state!=='idle',
  async selectTake(id){if(unavailable())throw Error('録音・編集処理が終わるまでお待ちください。');const take=takes.find(t=>t.id===id);if(!take)throw Error('録音テイクがありません。');await choose(take);if(activeId!==id)throw Error('テイクを編集へ読み込めませんでした。');return bridge.capture();},
  async suspendForPad(){if(unavailable())throw Error('録音・編集処理を先に完了してください。');stash();activeId=null;await selectStored(null);render();},
- flush:()=>edits.flushAll(),refresh,makeBackup,backupChanged:dirty,migration:()=>store.migration,
+ flush:()=>edits.flushAll(),refresh,makeBackup,exportBackup:()=>makeBackup({throwOnError:true}),importBackup,backupChanged:dirty,migration:()=>store.migration,
  unsaved:()=>edits.busy()||takes.some(t=>t.rawFailed||t.nameFailed||t.nameDirty||t.editStatus==='failed')
 };render();
 })();

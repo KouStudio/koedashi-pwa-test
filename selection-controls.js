@@ -71,14 +71,14 @@ function down(e,kind){
  e.preventDefault();stop();if(kind!=='new')target=kind==='left'?'start':'end';
  const g=gesture={kind,id:e.pointerId,node:e.currentTarget,data,zoom,offset:kind==='new'?0:e.clientX-lineX(target),t:boundary(state(),'start',point(e))};drag=g;
  try{g.node.setPointerCapture(g.id);}catch{finishGesture();return;}
- if(kind==='new'){g.t=Math.round(point(e)*sr)/sr;a=b=g.t;}update();
+ if(kind==='new'){g.kind='newPending';g.x=e.clientX;g.y=e.clientY;g.t=Math.round(point(e)*sr)/sr;}update();
 }
 byId('wave').onpointerdown=e=>down(e,'new');byId('left').onpointerdown=e=>down(e,'left');byId('right').onpointerdown=e=>down(e,'right');
 byId('track').onpointermove=e=>{
- const g=gesture;if(!g||g.id!==e.pointerId||g.kind==='tap')return;if(!editable()){cancel();return;}e.preventDefault();const t=point(e,g.offset);
+ const g=gesture;if(!g||g.id!==e.pointerId||g.kind==='tap')return;if(!editable()){cancel();return;}e.preventDefault();if(g.kind==='newPending'){if(Math.hypot(e.clientX-g.x,e.clientY-g.y)<=8)return;g.kind='new';a=b=g.t;}const t=point(e,g.offset);
  if(g.kind==='new'){const q=Math.round(t*sr)/sr;a=Math.min(q,g.t);b=Math.max(q,g.t);}else if(g.kind==='left')a=boundary(state(),'start',t);else b=boundary(state(),'end',t);update();
 };
-byId('track').onpointerup=e=>{const g=gesture;if(!g||g.id!==e.pointerId)return;if(g.kind==='tap'&&Math.abs(e.clientX-g.x)<8){stop();pos=g.t;if(isVideo)byId('video').currentTime=pos;update();}finishGesture();};
+byId('track').onpointerup=e=>{const g=gesture;if(!g||g.id!==e.pointerId)return;if((g.kind==='tap'||g.kind==='newPending')&&Math.abs(e.clientX-g.x)<8){stop();pos=g.t;if(isVideo)byId('video').currentTime=pos;update();}finishGesture();};
 byId('track').onpointercancel=finishGesture;byId('track').addEventListener('lostpointercapture',finishGesture);
 for(const [id,which]of [['left','start'],['right','end']]){
  byId(id).onclick=()=>pick(which);
