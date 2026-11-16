@@ -134,7 +134,7 @@ async function exportTake(take,kind){
 }
 $r('takeWavShare').addEventListener('click',()=>{if(!takeWavFile||unavailable())return;try{navigator.share({files:[takeWavFile]}).catch(e=>notice(e.name==='AbortError'?'共有をキャンセルしました。':'WAVの共有に失敗しました。保存リンクを試してください。',true));}catch(e){notice('WAV共有失敗：'+explain(e),true);}});
 function start(name=''){
- if(unavailable())return;
+ if(unavailable())return;bridge.trimHistory?.();
  const bytes=takes.reduce((n,t)=>n+t.bytes,0);if(bytes>=64*1048576||bridge.totalBytes(takes.map(t=>t.state).concat(base))>=bridge.budget){notice('保持データの目安を超えます。外部バックアップ後に整理してください。',true);return;}
  capture=null;desiredName=name;storageError='';$r('recTime').textContent='00:00';
  void recorder.start({countdown:$r('recCountdown').checked?3:0,maxBytes:Math.min(32*1048576,64*1048576-bytes)});
@@ -202,7 +202,7 @@ async function makeBackup({throwOnError=false}={}){
   backupFile=new File([blob],'KOEDASHI_BACKUP_'+new Date().toISOString().replace(/[:.]/g,'-')+'.koedashi-backup',{type:blob.type});
   const link=$r('safeBackupLink');link.href=backupURL;link.download=backupFile.name;link.textContent='作成したバックアップを端末へ保存';link.hidden=false;
   $r('safeShareBackup').hidden=!AudioCompat.canShare(backupFile,navigator);
-  $r('safeBackupStatus').textContent='バックアップ作成済み（ファイル生成のみ。端末への保存完了は確認できません）';return backupFile;
+  $r('safeBackupStatus').textContent='バックアップ作成済み（ファイル生成のみ。端末への保存完了は確認できません）'+(padBundle?.recoveryCount?' 未確定の下書きは別の復旧用シーンに含めました。':'');return backupFile;
  }catch(e){$r('safeBackupStatus').textContent='バックアップ未実施／作成失敗：'+explain(e);if(throwOnError)throw e;}
  finally{loading=false;bridge.lock(false);forgetLive();render();}
 }
@@ -245,11 +245,18 @@ async function boot(){
  }catch(e){ready=false;storageError=explain(e);notice('永続保存を開始できないため新規録音を停止しています。ファイル編集は利用できます。 '+storageError,true);}
  finally{loading=false;bridge.lock(false);render();}
 }
+
+bridge.onMemoryPressure?.(()=>{for(const t of takes)if(t.id!==activeId&&!edits.pending(t.id)&&t.editStatus!=='saving'&&t.editStatus!=='failed')t.state=null;});
+async function openSavedMaterial(id,history){
+ await reloadList();const t=takes.find(t=>t.id===id);if(!t)throw Error('新規保存済み素材を一覧から読み直してください。');await choose(t);if(activeId!==id||bridge.context().type!=='take')throw Error('素材は保存済みですが編集画面への読込を完了できませんでした。');
+ const state=bridge.capture();if(state.sr===history.sr){bridge.restore({...state,undo:history.undo.slice(),redo:history.redo.slice(),a:history.a,b:history.b,pos:history.pos,zoom:history.zoom});}dirty();render();
+}
+
 const bootPromise=boot();
 window.SoraRecordingSessions={ready:bootPromise,isReady:()=>ready,isRecording:()=>recorder.state!=='idle',
  async selectTake(id){if(unavailable())throw Error('録音・編集処理が終わるまでお待ちください。');const take=takes.find(t=>t.id===id);if(!take)throw Error('録音テイクがありません。');await choose(take);if(activeId!==id)throw Error('テイクを編集へ読み込めませんでした。');return bridge.capture();},
  async suspendForPad(){if(unavailable())throw Error('録音・編集処理を先に完了してください。');stash();activeId=null;await selectStored(null);render();},
- flush:()=>edits.flushAll(),refresh,makeBackup,exportBackup:()=>makeBackup({throwOnError:true}),importBackup,backupChanged:dirty,migration:()=>store.migration,
+ openSavedMaterial,flush:()=>edits.flushAll(),refresh,makeBackup,exportBackup:()=>makeBackup({throwOnError:true}),importBackup,backupChanged:dirty,migration:()=>store.migration,
  unsaved:()=>edits.busy()||takes.some(t=>t.rawFailed||t.nameFailed||t.nameDirty||t.editStatus==='failed')
 };render();
 })();

@@ -4,7 +4,7 @@
   const rawLoad = $('file').onchange;
   const oldReserve = reserve;
   let external = () => [], beforeFile = () => {}, afterFile = () => {}, activeFile = null, changed = () => {};
-  const listeners=new Set(),contexts=new Set();let owner={type:'file',id:null};
+  const listeners=new Set(),contexts=new Set(),extraStates=new Set(),pruners=new Set();let owner={type:'file',id:null};
   const budget = (navigator.deviceMemory && navigator.deviceMemory <= 2 ? 128 : 256) * 1048576;
   const documents = state => state ? [state.original,state.data,state.clip,...state.undo.map(s=>s.data),...state.redo.map(s=>s.data)] : [];
   function capture() {
@@ -13,9 +13,10 @@
   }
   reserve = function (extra = 0) {
     oldReserve(extra);
-    const retained = external().filter(Boolean).flatMap(documents);
+    let retained = external().concat(...[...extraStates].map(fn=>fn())).filter(Boolean).flatMap(documents);
     // Leave the original single-document long-audio budget unchanged.
     if(!retained.length)return;
+    if(E.bytes(original,data,clip,...undo.map(s=>s.data),...redo.map(s=>s.data),...retained)+extra>budget){for(const fn of pruners)fn();retained=external().concat(...[...extraStates].map(fn=>fn())).filter(Boolean).flatMap(documents);if(!retained.length)return;}
     if (E.bytes(original,data,clip,...undo.map(s=>s.data),...redo.map(s=>s.data),...retained) + extra > budget) throw Error('テイク全体のPCMメモリ目安を超えます。不要なテイクを削除し、短い範囲で編集してください。');
   };
   function restore(s) {
@@ -82,9 +83,11 @@
     capture,restore,load,documents,hasData:()=>!!data,isBusy:()=>busy,
     lock(value){stop();setBusy(value);},
     setExternalStates(fn){external=fn;},
+    addExternalStates(fn){extraStates.add(fn);},onMemoryPressure(fn){pruners.add(fn);},trimHistory(){for(const fn of pruners)fn();},
+    async restoreRegistered(registeredMarks=[]){if(!data||busy)return;setBusy(true);try{await commit(original,'登録時の状態を下書きに戻しました');marks=registeredMarks.slice();a=pos=0;b=duration();update();}finally{setBusy(false);}},
     onFileLoad(before,after){beforeFile=before;afterFile=after;},
     rename(name){if(data)$('filename').textContent=name;},
-    totalBytes(states){return E.bytes(...states.flatMap(documents),...documents(capture()));},
+    totalBytes(states){return E.bytes(...states.flatMap(documents),...documents(capture()),...[...extraStates].flatMap(fn=>fn().filter(Boolean).flatMap(documents)));},
     budget
   };
 })();

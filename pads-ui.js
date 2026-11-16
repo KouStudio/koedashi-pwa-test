@@ -1,7 +1,8 @@
 (function(){
 'use strict';
 const $k=id=>document.getElementById(id),S=window.SoraSafe,D=window.KoedashiData,B=window.SoraEditorBridge,R=window.SoraRecordingSessions,store=new D.PadStore();
-const V=window.KoedashiVolume,volumeOpen=new Set();
+const V=window.KoedashiVolume,volumeOpen=new Set(),drafts=new KoedashiPadDrafts(store),padSessions=new Map();
+const padWav=KoedashiPadExport.ui(store);
 const budget=(navigator.deviceMemory&&navigator.deviceMemory<=2?64:128)*1048576;
 let drag=null;
 let ready=false,busy=false,hydrating=false,mode='pads',sceneId=null,editingPadId=null,layout={},scenes=[],pads=[],serial=Promise.resolve(),sceneReady=Promise.resolve();
@@ -27,10 +28,10 @@ const volumes=new V.Queue(store,(id,state,error)=>{
  showSave(state==='saving'?'保存中':state==='saved'?'保存済み':'音量保存失敗：'+problem(error),state==='failed');
  if(error)message('音量保存失敗：'+problem(error)+' 現在の再生には反映していますが、再起動で戻る可能性があります。',true);
 });
-const queue=new S.EditQueue(store,D.Codec.pack,(id,state,error,revision)=>{
+const queue=new S.EditQueue(drafts,D.Codec.pack,(id,state,error,revision)=>{
  editStates.set(id,state);
- if(revision!==undefined){const p=pads.find(p=>p.id===id);if(p)p.revision=revision;}
- saveFailure=state==='failed';showSave(state==='saving'?'保存中':state==='saved'?'保存済み':'保存失敗：'+problem(error),state==='failed');
+ const cached=padSessions.get(id);if(cached&&state==='saved')cached.stamp=drafts.contexts.get(id)?.stamp||null;
+ saveFailure=state==='failed';showSave(state==='saving'?'下書き保存中':state==='saved'?'下書き保存済み（元パッド未更新）':'下書き保存失敗：'+problem(error),state==='failed');
 });
 function dropEdit(id){queue.drop(id);editStates.delete(id);}
 function stopAll(){player.stop();B.stopPreview();}
@@ -64,10 +65,11 @@ function render(){performanceView.render(scenes,pads,sceneId,player);
   function action(label,fn,disabled=false){const b=document.createElement('button');b.textContent=label;b.disabled=disabled;b.addEventListener('click',()=>{menu.open=false;fn();});menu.append(b);return b;}
   action('名前変更',()=>{stopAll();const name=window.prompt('パッド名',pad.name);if(name?.trim())void operation(async()=>{await store.rename('pads',pad.id,name);markChanged();if(editingPadId===pad.id)B.rename(name.trim().slice(0,80)+'.wav');});});
   action('音声の編集',()=>void editPad(pad.id));
+  action('WAVに書き出し',()=>void padWav.export(pad.id),!pad.original&&!pad.edit);
   const up=action('前へ',()=>void operation(async()=>{await store.reorder('pads',pad.id,-1);markChanged();}),i===0);up.dataset.edge=i===0?'yes':'no';
   const down=action('後へ',()=>void operation(async()=>{await store.reorder('pads',pad.id,1);markChanged();}),i===group.length-1);down.dataset.edge=i===group.length-1?'yes':'no';
-  action('登録時の音声に戻す',()=>{stopAll();if(window.confirm('「'+pad.name+'」のパッド編集を登録時に戻します。元の録音テイクは変更しません。'))void operation(async()=>{await queue.flush(pad.id).catch(()=>{});const p=await store.getPad(pad.id);await store.resetEdit(pad.id,p.revision);dropEdit(pad.id);markChanged();if(editingPadId===pad.id){editingPadId=null;B.setContext({type:'file',id:null});B.restore(null);latestEdit=null;}});});
-  action('パッドを削除',()=>{stopAll();if(window.confirm('「'+pad.name+'」のパッド内音声を削除します。必要な外部バックアップは保存済みですか？元の録音テイクがある場合、そのテイクは削除しません。'))void operation(async()=>{await queue.flush(pad.id).catch(()=>{});await volumes.flush(pad.id).catch(()=>{});await store.removePad(pad.id);volumes.drop(pad.id);dropEdit(pad.id);markChanged();if(editingPadId===pad.id){editingPadId=null;latestEdit=null;B.setContext({type:'file',id:null});B.restore(null);await store.saveLayout(currentLayout());}});});
+  action('登録時の音声に戻す',()=>{stopAll();if(window.confirm('「'+pad.name+'」の登録時の状態を編集下書きに開きます。保存方法を選ぶまで元パッドを更新しません。Undoで直前にも戻せます。'))void editPad(pad.id).then(()=>{if(editingPadId===pad.id)return resetRegistered();}).catch(e=>message(problem(e),true));});
+  action('パッドを削除',()=>{stopAll();if(window.confirm('「'+pad.name+'」のパッド内音声を削除します。必要な外部バックアップは保存済みですか？元の録音テイクがある場合、そのテイクは削除しません。'))void operation(async()=>{await queue.flush(pad.id);await volumes.flush(pad.id);await store.removePad(pad.id);volumes.drop(pad.id);dropEdit(pad.id);markChanged();if(editingPadId===pad.id){editingPadId=null;latestEdit=null;B.setContext({type:'file',id:null});B.restore(null);await store.saveLayout(currentLayout());}});});
   const handle=document.createElement('button');handle.className='ko-drag-handle';handle.textContent='≡';handle.setAttribute('aria-label',pad.name+'を長押しして並べ替え');handle.setAttribute('aria-grabbed','false');handle.title='長押しして移動（メニューの前へ・後へも利用できます）';
   card.append(play,handle,volumeControl(pad),menu);$k('koPadGrid').append(card);
  }
@@ -97,7 +99,7 @@ async function operation(fn,{prepare=true}={}){
 function padEditChanged(state){
  if(hydrating||!editingPadId||!state||B.context().type!=='pad')return;
  const key=[state.data,state.a,state.b,state.pos,state.zoom,state.marks.join(',')];if(lastKey&&key.every((v,i)=>v===lastKey[i]))return;
- lastKey=key;latestEdit=state;markChanged();const p=pads.find(p=>p.id===editingPadId);if(p)queue.enqueue(p.id,state,p.revision);
+ lastKey=key;latestEdit=state;markChanged();const p=pads.find(p=>p.id===editingPadId);if(p)queue.enqueue(p.id,state,drafts.contexts.get(p.id)?.baseRevision??p.revision);
 }
 async function modeTo(value){
  if(!ready||busy||B.isBusy())return;if(value==='edit'&&!B.hasData()&&layout.editingPadId)return editPad(layout.editingPadId);if(R.isRecording()&&value!=='record'){message('録音を停止してからモードを切り替えてください。',true);return;}
@@ -108,12 +110,14 @@ async function modeTo(value){
 }
 async function editPad(id){
  if(busy||!ready||R.isRecording()){message('録音・保存処理を先に完了してください。',true);return;}
+ if(id===editingPadId&&B.context().type==='pad'&&B.hasData()){mode='edit';applyMode();await store.saveLayout(currentLayout());return;}
+ cacheActivePad();
  player.cancelPreparation();B.stopPreview();busy=true;B.lock(true);refresh();try{
   if(editingPadId)padEditChanged(B.capture());await queue.flushAll();
   const p=await store.getPad(id);if(!p)throw Error('パッドがありません。');hydrating=true;
-  const state=await D.Codec.state(p);await B.prepare(state);B.lock(false);const suspending=R.suspendForPad();B.lock(true);await suspending;B.setContext({type:'pad',id});B.restore(state);B.rename(p.name+'.wav');editingPadId=id;latestEdit=state;lastKey=[state.data,state.a,state.b,state.pos,state.zoom,state.marks.join(',')];
-  mode='edit';sceneId=p.sceneId;await store.saveLayout(currentLayout());markChanged();showSave('保存済み');message('パッド「'+p.name+'」を編集しています。原録音と登録時のPCMは保持されます。');
- }catch(e){showSave('読み込み／保存失敗：'+problem(e),true);message('パッド編集を開けません：'+problem(e),true);}finally{hydrating=false;busy=false;B.lock(false);applyMode();refresh();R.refresh();}
+  const draft=await drafts.get(id),cached=padSessions.get(id);drafts.open(p,draft);let state;if(cached&&cached.baseRevision===(draft?.baseRevision??p.revision)&&cached.stamp===(draft?.stamp||null))state=cached.state;else{state=await D.Codec.state(p);if(draft){state={...state,data:await S.PCM.decodeData(draft.edit),sr:draft.edit.sr,a:draft.edit.a,b:draft.edit.b,pos:draft.edit.pos,zoom:draft.edit.zoom,marks:draft.edit.marks.slice()};}}padSessions.delete(id);await B.prepare(state);B.lock(false);const suspending=R.suspendForPad();B.lock(true);await suspending;B.setContext({type:'pad',id});B.restore(state);B.rename(p.name+'.wav');editingPadId=id;latestEdit=state;lastKey=[state.data,state.a,state.b,state.pos,state.zoom,state.marks.join(',')];
+  mode='edit';sceneId=p.sceneId;await store.saveLayout(currentLayout());markChanged();showSave(draft?'下書きを復元（元パッド未更新）':'保存済み');message('パッド「'+p.name+'」を編集しています。下書きを自動保存し、元パッドの更新は保存方法から確定します。');
+ }catch(e){showSave('読み込み／保存失敗：'+problem(e),true);message('パッド編集を開けません：'+problem(e),true);}finally{if(editingPadId)padSessions.delete(editingPadId);hydrating=false;busy=false;B.lock(false);applyMode();refresh();R.refresh();}
 }
 async function registerState(state,sourceTakeId=null,suggested=''){
  if(!ready||busy||R.isRecording())throw Error('録音・保存処理を終えてから登録してください。');
@@ -151,7 +155,7 @@ $k('koReloadAudio').addEventListener('click',()=>{player.cancelPreparation();for
 $k('koRegister').addEventListener('click',()=>void registerCurrent());
 $k('koFile').addEventListener('click',()=>{stopAll();void player.arm().catch(e=>message(problem(e),true));});
 $k('koFile').addEventListener('change',e=>{const file=e.target.files[0];e.target.value='';void importFile(file);});
-$k('koSavePad').addEventListener('click',async()=>{try{padEditChanged(B.capture());await queue.flushAll();showSave('保存済み');await reload();message('パッド編集を保存しました。声出しモードで最新音声を準備できます。');}catch(e){showSave('保存失敗：'+problem(e),true);}});
+$k('koSavePad').addEventListener('click',()=>window.KoedashiPadSaveUI?.open());
 for(const event of ['pointerdown','focus'])$k('koSceneSelect').addEventListener(event,stopAll);
 $k('koSceneSelect').addEventListener('change',e=>{const id=e.target.value;player.cancelPreparation();void operation(async()=>{await queue.flushAll();const next={...currentLayout(),sceneId:id};await store.saveLayout(next);sceneId=id;markChanged();});});
 $k('koSceneNew').addEventListener('click',()=>{stopAll();const name=window.prompt('新しいシーン名','シーン'+(scenes.length+1));if(name?.trim())void operation(async()=>{const scene=await store.createScene(name);markChanged();sceneId=scene.id;await store.saveLayout(currentLayout());});});
@@ -169,15 +173,15 @@ drag=new KoedashiPadDrag($k('koPadGrid'),{
  onCommit:(id,ids,expected)=>void operation(async()=>{if(await store.reorderPads(id,ids,expected))markChanged();message('パッドの並び順を保存しました。');},{prepare:false})
 });
 B.onChange(state=>{padEditChanged(state);refresh();});
-B.onContext((next,state)=>{if(next.type==='pad'&&!hydrating&&state){editingPadId=next.id;latestEdit=state;lastKey=[state.data,state.a,state.b,state.pos,state.zoom,state.marks.join(',')];mode='edit';applyMode();}if(editingPadId&&next.type!=='pad'){padEditChanged(state);editingPadId=null;latestEdit=null;lastKey=null;}if(next.type==='take'&&ready&&!busy){mode='edit';applyMode();void store.saveLayout(currentLayout()).catch(e=>showSave('保存失敗：'+problem(e),true));}refresh();});
+B.onContext((next,state)=>{if(next.type==='pad'&&!hydrating&&state){editingPadId=next.id;latestEdit=state;lastKey=[state.data,state.a,state.b,state.pos,state.zoom,state.marks.join(',')];mode='edit';applyMode();}if(editingPadId&&next.type!=='pad'){cacheActivePad();padEditChanged(state);editingPadId=null;latestEdit=null;lastKey=null;}if(next.type==='take'&&ready&&!busy){mode='edit';applyMode();void store.saveLayout(currentLayout()).catch(e=>showSave('保存失敗：'+problem(e),true));}refresh();});
 for(const type of ['visibilitychange','pagehide']){const target=type==='visibilitychange'?document:window;target.addEventListener(type,()=>{if(type==='pagehide'||document.hidden){stopAll();if(editingPadId)padEditChanged(B.capture());void queue.flushAll().catch(()=>{});void volumes.flushAll().catch(()=>{});}});}
 window.addEventListener('beforeunload',e=>{if(busy||queue.busy()||volumes.busy()||volumes.failed()||saveFailure){e.preventDefault();e.returnValue='';}});
 window.KoedashiPads={
- stopAll,registerTake,registerCurrent,checkpoint(){if(editingPadId)padEditChanged(B.capture());},
+ stopAll,registerTake,registerCurrent,saveInfo,savePadChoice,resetRegistered,checkpoint(){if(editingPadId)padEditChanged(B.capture());},
  showEditor(){if(ready&&!busy){mode='edit';applyMode();void store.saveLayout(currentLayout()).catch(e=>showSave('保存失敗：'+problem(e),true));}},
  hasData:()=>scenes.length>0||pads.length>0,
  safeStatusChanged(text){$k('koSafeSummary').textContent='録音保存：'+text;$k('koSafeSummary').dataset.warning=/保存失敗|保存中|不整合|確認要/.test(text)?'yes':'no';},
- async backupSnapshot(){await serial;if(editingPadId)padEditChanged(B.capture());await queue.flushAll().catch(()=>{});await volumes.flushAll().catch(()=>{});const snapshot=await store.layout();snapshot.layout=currentLayout();for(const pad of snapshot.pads){const level=volumes.pending(pad.id);if(level!==undefined)pad.volume=level;const pending=queue.pending(pad.id);if(pending)pad.edit=await D.Codec.pack(pending);}return snapshot;},
+ async backupSnapshot(){await serial;if(editingPadId)padEditChanged(B.capture());await queue.flushAll().catch(()=>{});await volumes.flushAll().catch(()=>{});const snapshot=await store.layout();snapshot.layout=currentLayout();for(const pad of snapshot.pads){const level=volumes.pending(pad.id);if(level!==undefined)pad.volume=level;}const pending=[];for(const [id,job]of queue.jobs)if(job.pending){const c=drafts.contexts.get(id),p=pads.find(p=>p.id===id);pending.push({id,name:p?.name||c?.name||'パッド',sourceTakeId:p?.sourceTakeId||c?.sourceTakeId,volume:p?.volume??c?.volume??100,edit:await D.Codec.pack(job.pending),dirty:true});}return drafts.backup(snapshot,pending);},
  async beforeImport(){if(busy)throw Error('声出しの保存処理が終わるまでお待ちください。');stopAll();busy=true;refresh();try{if(editingPadId)padEditChanged(B.capture());await queue.flushAll();await volumes.flushAll();}catch(e){busy=false;refresh();throw e;}},
  async afterImport(success,{legacyEdit=false}={}){
   stopAll();try{
@@ -186,6 +190,30 @@ window.KoedashiPads={
  }
 
 };
+function cacheActivePad(){if(editingPadId&&B.context().type==='pad'&&B.hasData()){const c=drafts.contexts.get(editingPadId);padSessions.set(editingPadId,{state:B.capture(),baseRevision:c?.baseRevision,stamp:c?.stamp||null});}}
+function prunePadSessions(){for(const [id]of padSessions)if(id!==editingPadId&&!queue.pending(id)&&!queue.jobs.get(id)?.running)padSessions.delete(id);}
+B.addExternalStates?.(()=>[...padSessions.values()].map(s=>s.state).concat([...queue.jobs].filter(([id])=>id!==editingPadId).map(([,job])=>job.pending).filter(Boolean)));
+B.onMemoryPressure?.(prunePadSessions);
+function saveInfo(){if(!editingPadId||B.context().type!=='pad'||!B.hasData())return null;const p=pads.find(p=>p.id===editingPadId),c=drafts.contexts.get(editingPadId);if(!c)return null;const state=B.capture();return {id:editingPadId,name:p?.name||c.name,scene:p?.sceneId||c.sceneId,sceneName:scenes.find(s=>s.id===(p?.sceneId||c.sceneId))?.name||'登録先不明',savedSeconds:p?(p.edit||p.original).frames/(p.edit||p.original).sr:null,seconds:state.data[0].length/state.sr,status:editStates.get(editingPadId)||'unchanged',canOverwrite:!!p&&p.revision===c.baseRevision,busy:busy||B.isBusy()};}
+async function resetRegistered(){if(!editingPadId||busy||B.isBusy())throw Error('パッドを編集画面で開いてください。');stopAll();await B.restoreRegistered(pads.find(p=>p.id===editingPadId)?.original?.marks||[]);message('登録時の状態を下書きに戻しました。元パッドへ反映するには保存方法を選んでください。Undoで直前に戻せます。');}
+async function savePadChoice(kind,{name='',alsoPad=false}={}){
+ if(!ready||busy||B.isBusy()||!editingPadId||B.context().type!=='pad')throw Error('編集元のパッドを確認できません。勝手な上書きは行いません。');
+ const id=editingPadId;stopAll();busy=true;B.lock(true);refresh();let committed=false,committedResult=null;
+ try{
+  padEditChanged(B.capture());try{await queue.flushAll();}catch(e){if(kind==='overwrite')throw e;}
+  drafts.frozen.add(id);const state=B.capture(),pcm=await D.Codec.pack(state);let result;
+  if(kind==='overwrite'){
+   const p=await drafts.overwrite(id,pcm);committed=true;committedResult={kind,id,name:p.name};dropEdit(id);drafts.records.delete(id);drafts.open(p,null);lastKey=[state.data,state.a,state.b,state.pos,state.zoom,state.marks.join(',')];latestEdit=state;markChanged();await reload();showSave('保存済み');message('「'+p.name+'」を上書き保存しました。元録音・他パッド・登録時の音声は変更していません。');result={kind,id,name:p.name};
+  }else if(kind==='new'){
+   const blob=await AudioEngine.wav(state.data,state.sr),saved=await drafts.newMaterial(id,name,blob,pcm,alsoPad);committed=true;committedResult={kind,id:saved.take.id,name:saved.take.name,padId:saved.pad?.id||null};dropEdit(id);drafts.records.delete(id);drafts.contexts.delete(id);padSessions.delete(id);editingPadId=null;latestEdit=null;lastKey=null;markChanged();await reload();hydrating=true;B.lock(false);
+   let warning='';try{await R.openSavedMaterial(saved.take.id,state);}catch(e){B.setContext({type:'file',id:null});warning='素材は保存済みですが、編集画面の再表示を完了できませんでした。録音・素材一覧から開き直してください：'+problem(e);}
+   mode='edit';await store.saveLayout(currentLayout());showSave('保存済み');message('「'+saved.take.name+'」を新規素材として保存しました。元パッドは変更していません。'+warning);result={kind,id:saved.take.id,name:saved.take.name,padId:saved.pad?.id||null,warning};
+  }else throw Error('保存方法が不正です。');
+  return result;
+ }catch(e){showSave((committed?'保存確定後の画面更新に失敗：':'保存失敗：')+problem(e),true);message((committed?'保存は確定済みです。再保存は不要です。素材一覧から開き直してください。':'')+problem(e),true);if(committed)return {...committedResult,warning:problem(e)};throw e;}
+ finally{drafts.frozen.delete(id);hydrating=false;busy=false;B.lock(false);applyMode();refresh();R.refresh();}
+}
+
 async function boot(){
  try{
   await R.ready;await store.open();await store.ensureScene();const data=await store.layout();scenes=data.scenes;pads=data.pads;for(const pad of pads){const pending=volumes.pending(pad.id);if(pending!==undefined)pad.volume=pending;}layout=data.layout;sceneId=layout.sceneId||scenes[0].id;mode=layout.mode||'pads';ready=true;
