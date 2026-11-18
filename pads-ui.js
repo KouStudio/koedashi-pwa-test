@@ -11,7 +11,7 @@ const message=(text,error=false)=>{$k('koStatus').textContent=text;$k('koStatus'
 const problem=e=>e?.name==='QuotaExceededError'?'保存容量が不足しています。元音声を削除せず、外部バックアップを作成してください。':e?.message||String(e);
 const markChanged=()=>R.backupChanged?.();
 function showSave(text,error=false){if(!error&&volumes.failed()){text='保存失敗（未保存のパッド音量があります。音量欄から再試行／外部バックアップで回収してください）';error=true;}else if(!error&&[...editStates.values()].includes('failed')){text='保存失敗（未保存のパッド編集があります。外部バックアップで回収してください）';error=true;}else if(!error&&text==='保存済み'&&([...editStates.values()].includes('saving')||volumes.busy()))text='保存中';saveFailure=error;$k('koSaveStatus').textContent='声出し：'+text;$k('koSaveStatus').className=error?'hint rec-error':'hint';}
-const performanceView=new KoedashiPerformance({stop:()=>stopAll(),play:id=>{B.stopPreview();void player.play(id);},scene:id=>{$k('koSceneSelect').value=id;$k('koSceneSelect').dispatchEvent(new Event('change'));}});
+const performanceView=new KoedashiPerformance({beforeResume:()=>B.stopPreview(),stop:()=>stopAll(),play:id=>{B.stopPreview();void player.play(id);},scene:id=>{$k('koSceneSelect').value=id;$k('koSceneSelect').dispatchEvent(new Event('change'));}});
 performanceView.actions.reorder=async(id,ids,expected)=>{
  let saved=false;
  await operation(async()=>{if(mode!=='simple'||sceneId!==id)throw Error('表示中のシーンが変わりました。');if(await store.reorderPads(id,ids,expected))markChanged();saved=true;},{prepare:false});
@@ -19,7 +19,7 @@ performanceView.actions.reorder=async(id,ids,expected)=>{
 };
 const player=new KoedashiPlayer({
  onReady(id,state,error){performanceView.ready(id,state,error);const button=buttons.get(id),label=labels.get(id);if(button)button.disabled=!!drag?.active||state!=='ready';if(label)label.textContent=state==='ready'?'再生可能':state==='loading'?'読み込み中…':'読込失敗：'+error;},
- onActive(id){performanceView.active(id,player,pads);for(const [key,button]of buttons){button.className='ko-pad-play'+(key===id?' playing':'');button.setAttribute('aria-pressed',String(key===id));}if(id){wasPlaying=true;message('再生中：'+(pads.find(p=>p.id===id)?.name||''));}else if(wasPlaying){wasPlaying=false;message('再生を停止しました。');}},
+ onActive(id){performanceView.active(id,player,pads);for(const [key,button]of buttons){button.className='ko-pad-play'+(key===id?(player.paused?' paused':' playing'):'');button.setAttribute('aria-pressed',String(key===id));}if(id){wasPlaying=true;message((player.paused?'一時停止中：':'再生中：')+(pads.find(p=>p.id===id)?.name||''));}else if(wasPlaying){wasPlaying=false;message('再生を停止しました。');}},
  onError:text=>{message(text,true);$k('koSimpleNotice').textContent=text;$k('koSimpleNotice').setAttribute('role','alert');}
 },window,budget);
 const volumeWidgets=new Map();
@@ -41,7 +41,7 @@ function refresh(){performanceView.lock(busy||!ready||R.isRecording()||B.isBusy(
  const locked=busy||!!drag?.active||!ready||R.isRecording()||B.isBusy();
  for(const id of ['koSceneSelect','koSceneNew','koSceneRename','koSceneDelete','koSceneUp','koSceneDown','koFile','koRegister','koSavePad','koReloadAudio'])$k(id).disabled=locked;
  $k('koRegister').disabled=locked||!B.hasData();$k('koSavePad').disabled=locked||!editingPadId;
- for(const id of ['koModeRecord','koModeEdit','koModePads'])$k(id).disabled=busy||!!drag?.active||!ready||B.isBusy();
+ for(const id of ['koModeRecord','koModeEdit','koModePads','koModeSimple'])$k(id).disabled=busy||!!drag?.active||!ready||B.isBusy();
  for(const el of $k('koPadGrid').querySelectorAll('.ko-menu button'))el.disabled=locked||el.dataset.edge==='yes';
  for(const el of $k('koPadGrid').querySelectorAll('.ko-drag-handle'))el.disabled=(!drag?.active&&locked)||!drag?.supported||pads.filter(p=>p.sceneId===sceneId).length<2;
  for(const [id,button]of buttons)button.disabled=!!drag?.active||player.states.get(id)?.state!=='ready';
@@ -181,7 +181,7 @@ window.KoedashiPads={
  showEditor(){if(ready&&!busy){mode='edit';applyMode();void store.saveLayout(currentLayout()).catch(e=>showSave('保存失敗：'+problem(e),true));}},
  hasData:()=>scenes.length>0||pads.length>0,
  safeStatusChanged(text){$k('koSafeSummary').textContent='録音保存：'+text;$k('koSafeSummary').dataset.warning=/保存失敗|保存中|不整合|確認要/.test(text)?'yes':'no';},
- async backupSnapshot(){await serial;if(editingPadId)padEditChanged(B.capture());await queue.flushAll().catch(()=>{});await volumes.flushAll().catch(()=>{});const snapshot=await store.layout();snapshot.layout=currentLayout();for(const pad of snapshot.pads){const level=volumes.pending(pad.id);if(level!==undefined)pad.volume=level;}const pending=[];for(const [id,job]of queue.jobs)if(job.pending){const c=drafts.contexts.get(id),p=pads.find(p=>p.id===id);pending.push({id,name:p?.name||c?.name||'パッド',sourceTakeId:p?.sourceTakeId||c?.sourceTakeId,volume:p?.volume??c?.volume??100,edit:await D.Codec.pack(job.pending),dirty:true});}return drafts.backup(snapshot,pending);},
+ async backupSnapshot(){await serial;if(editingPadId)padEditChanged(B.capture());await queue.flushAll().catch(()=>{});await volumes.flushAll().catch(()=>{});const snapshot=await store.layout();snapshot.layout=currentLayout();for(const pad of snapshot.pads){const level=volumes.pending(pad.id);if(level!==undefined)pad.volume=level;}const pending=[];for(const [id,job]of queue.jobs)if(job.pending){const c=drafts.contexts.get(id),p=pads.find(p=>p.id===id);pending.push({id,name:p?.name||c?.name||'パッド',sourceTakeId:p?.sourceTakeId||c?.sourceTakeId,volume:p?.volume??c?.volume??100,edit:await D.Codec.pack(job.pending),dirty:true});}const recovered=await drafts.backup(snapshot,pending);return window.KoedashiPasteSession?window.KoedashiPasteSession.backup(recovered):recovered;},
  async beforeImport(){if(busy)throw Error('声出しの保存処理が終わるまでお待ちください。');stopAll();busy=true;refresh();try{if(editingPadId)padEditChanged(B.capture());await queue.flushAll();await volumes.flushAll();}catch(e){busy=false;refresh();throw e;}},
  async afterImport(success,{legacyEdit=false}={}){
   stopAll();try{

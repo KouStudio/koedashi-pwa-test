@@ -248,7 +248,7 @@ async function boot(){
 
 bridge.onMemoryPressure?.(()=>{for(const t of takes)if(t.id!==activeId&&!edits.pending(t.id)&&t.editStatus!=='saving'&&t.editStatus!=='failed')t.state=null;});
 async function openSavedMaterial(id,history){
- await reloadList();const t=takes.find(t=>t.id===id);if(!t)throw Error('新規保存済み素材を一覧から読み直してください。');await choose(t);if(activeId!==id||bridge.context().type!=='take')throw Error('素材は保存済みですが編集画面への読込を完了できませんでした。');
+ await reloadList();const t=takes.find(t=>t.id===id);if(!t)throw Error('新規保存済み素材を一覧から読み直してください。');t.state=null;await choose(t);if(activeId!==id||bridge.context().type!=='take')throw Error('素材は保存済みですが編集画面への読込を完了できませんでした。');
  const state=bridge.capture();if(state.sr===history.sr){bridge.restore({...state,undo:history.undo.slice(),redo:history.redo.slice(),a:history.a,b:history.b,pos:history.pos,zoom:history.zoom});}dirty();render();
 }
 
@@ -256,6 +256,8 @@ const bootPromise=boot();
 window.SoraRecordingSessions={ready:bootPromise,isReady:()=>ready,isRecording:()=>recorder.state!=='idle',
  async selectTake(id){if(unavailable())throw Error('録音・編集処理が終わるまでお待ちください。');const take=takes.find(t=>t.id===id);if(!take)throw Error('録音テイクがありません。');await choose(take);if(activeId!==id)throw Error('テイクを編集へ読み込めませんでした。');return bridge.capture();},
  async suspendForPad(){if(unavailable())throw Error('録音・編集処理を先に完了してください。');stash();activeId=null;await selectStored(null);render();},
+ async detachForPaste(){const take=takes.find(t=>t.id===activeId);if(!take)return null;stash();await edits.flushAll();const row=await store.read(take.id),reference={id:take.id,name:take.name,revision:row.take.revision};activeId=null;await selectStored(null);bridge.setContext({type:'file',id:null});render();return reference;},
+ async openDetached(state){if(unavailable())throw Error('処理中です。');stash();await edits.flushAll();activeId=null;await selectStored(null);bridge.setContext({type:'file',id:null});bridge.restore(state);window.KoedashiPads?.showEditor();render();},
  openSavedMaterial,flush:()=>edits.flushAll(),refresh,makeBackup,exportBackup:()=>makeBackup({throwOnError:true}),importBackup,backupChanged:dirty,migration:()=>store.migration,
  unsaved:()=>edits.busy()||takes.some(t=>t.rawFailed||t.nameFailed||t.nameDirty||t.editStatus==='failed')
 };render();

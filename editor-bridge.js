@@ -20,17 +20,17 @@
     if (E.bytes(original,data,clip,...undo.map(s=>s.data),...redo.map(s=>s.data),...retained) + extra > budget) throw Error('テイク全体のPCMメモリ目安を超えます。不要なテイクを削除し、短い範囲で編集してください。');
   };
   function restore(s) {
-    const carriedClip=clip, carriedRate=sr;
+    const carriedClip=clip;
     stop(); clearPreparedExport();
     if (url) URL.revokeObjectURL(url);
     url=null;
     if (!s) {
-      original=data=undefined; activeFile=null;clip=null; undo=[];redo=[];marks=[];url=null;isVideo=false;raw=false;a=b=pos=0;
+      original=data=undefined; activeFile=null; undo=[];redo=[];marks=[];url=null;isVideo=false;raw=false;a=b=pos=0;
       $('editor').hidden=$('dock').hidden=true;$('video').pause();$('video').removeAttribute('src');$('video').load();
       status('録音するか、音声・動画ファイルを開いてください。');return;
     }
-    ({original,data,sr,clip,pos,a,b,zoom,raw,isVideo}=s);
-    clip=carriedClip && carriedRate===sr ? carriedClip : null;
+    ({original,data,sr,pos,a,b,zoom,raw,isVideo}=s);
+    clip=carriedClip;
     activeFile=s.file;
     if(isVideo && activeFile)url=URL.createObjectURL(activeFile);
     undo=s.undo.slice();redo=s.redo.slice();marks=s.marks.slice();
@@ -41,7 +41,7 @@
     $('mode').textContent=isVideo?'VIDEO / 尺を維持':'AUDIO';
     $('editor').hidden=$('dock').hidden=false;
     $('compare').textContent=raw?'試聴：編集前（原音）':'試聴：編集後';
-    $('clipboard').textContent=clip?'コピー済み：'+(clip[0].length/sr).toFixed(3)+'秒 / '+clip.length+'ch':'コピーした音声は、挿入または選択範囲の置換に使えます。';
+    $('clipboard').textContent=clip?'コピー済み：'+(clip[0].length/clipRate).toFixed(3)+'秒 / '+clip.length+'ch':'コピーした音声は、挿入または選択範囲の置換に使えます。';
     drawKey=null;update();status('編集状態を復元しました。');
   }
   async function load(file, {keepClipboard=false,audioOnly=false}={}) {
@@ -61,7 +61,7 @@
       $('videohelp').hidden=true;$('mode').textContent='AUDIO';update();
     }
     activeFile=file;
-    if(keepClipboard && previous && previous.sr===sr){clip=previous.clip;update();}
+    if(clip){$('clipboard').textContent='コピー済み：'+(clip[0].length/clipRate).toFixed(3)+'秒 / '+clip.length+'ch（位置カーソルへ挿入）';update();}
     return capture();
   }
   $('file').onchange=async event=>{
