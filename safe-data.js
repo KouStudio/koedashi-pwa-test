@@ -151,7 +151,8 @@ async function makeBackup(rows,selected,padBundle=null){
  const size=new ArrayBuffer(4);new DataView(size).setUint32(0,json.length,true);
  return new Blob([padBundle?MAGIC2:MAGIC,size,json,...sections],{type:'application/octet-stream'});
 }
-async function parseBackup(file){
+async function parseBackup(file,onProgress=()=>{}){
+ const report=value=>{try{onProgress(value);}catch{}};report({stage:'バックアップ構造確認'});
  if(file.size>MAX_BACKUP+2*1048576+64)fail('バックアップが大きすぎます。');
  const text=await file.slice(0,32).text(),magic=text.startsWith(MAGIC2)?MAGIC2:text.startsWith(MAGIC)?MAGIC:null;if(!magic)fail('SORA / KOEDASHIバックアップ形式ではありません。');
  const prefix=new TextEncoder().encode(magic),start=prefix.length+4;
@@ -161,11 +162,11 @@ async function parseBackup(file){
  const {metadataHash,...metadata}=header;
  if(typeof metadataHash!=='string'||await hash(new Blob([JSON.stringify(metadata)]))!==metadataHash)fail('バックアップ情報のチェックサムが一致しません。既存データは変更していません。');
  if(![1,2].includes(header.version)||header.version!==(magic===MAGIC2?2:1)||!Array.isArray(header.takes)||(header.version===1&&!header.takes.length))fail('バックアップの版・テイク数が不正です。');
- let offset=0;const ids=new Set(),rows=[];
+ let offset=0;const ids=new Set(),rows=[];let doneFiles=0;const countPCM=v=>Array.isArray(v?.channels)?v.channels.reduce((n,c)=>n+(Array.isArray(c)?c.length:0),0):0;const descriptorCount=header.takes.reduce((n,t)=>n+(Array.isArray(t.original)?t.original.length:0)+countPCM(t.edit),0)+(Array.isArray(header.pads)?header.pads:[]).reduce((n,p)=>n+countPCM(p.original)+countPCM(p.edit),0);
  async function get(d){
   if(!d||!Number.isSafeInteger(d.size)||d.size<1||d.size>MAX_BACKUP||d.offset!==offset||base+offset+d.size>file.size||!/^[0-9a-f]{64}$/.test(d.hash)||(!mediaType(d.type)&&d.type!=='application/octet-stream'))fail('バックアップ音声の範囲が不正です。');
   const blob=file.slice(base+offset,base+offset+d.size,d.type);offset+=d.size;
-  if(await hash(blob)!==d.hash)fail('バックアップのチェックサムが一致しません。既存データは変更していません。');return {blob,hash:d.hash};
+  const bytes=await blob.arrayBuffer();const digest=Array.from(new Uint8Array(await root.crypto.subtle.digest('SHA-256',bytes)),x=>x.toString(16).padStart(2,'0')).join('');if(digest!==d.hash)fail('バックアップのチェックサムが一致しません。既存データは変更していません。');doneFiles++;report({stage:'音声ブロック検証',doneBytes:offset,totalBytes:file.size-base,doneFiles,totalFiles:descriptorCount});return {blob:new Blob([bytes],{type:d.type}),hash:d.hash};
  }
  for(const t of header.takes){
   if(t.recordedAt!==undefined&&!finite(t.recordedAt,0,8640000000000000))fail('録音開始日時が不正です。');
@@ -174,11 +175,12 @@ async function parseBackup(file){
   for(const d of t.original){if(!finite(d.lastMs,0,1e12))fail('チャンクの時刻が不正です。');chunks.push({...await get(d),lastMs:d.lastMs,index:chunks.length,size:d.size});}
   if(!chunks.length)fail('原音がありません。');
   let edit=null;
-  if(t.edit){edit={...t.edit,channels:[]};if(!Array.isArray(t.edit.channels)||t.edit.channels.length>2)fail('編集情報が不正です。');for(const channel of t.edit.channels){if(!Array.isArray(channel)||channel.length>2048)fail('PCMブロック数が不正です。');const blocks=[];for(const d of channel)blocks.push(await get(d));edit.channels.push(blocks);}validateEdit(edit);}
+  if(t.edit){edit={...t.edit,channels:[]};if(!Array.isArray(t.edit.channels)||t.edit.channels.length>2)fail('編集情報が不正です。');for(const channel of t.edit.channels){if(!Array.isArray(channel)||channel.length>2048)fail('PCMブロック数が不正です。');const blocks=[];for(const d of channel)blocks.push(await get(d));edit.channels.push(blocks);}validateEdit(edit);if(edit.mode==='pcm')await validateSamples(edit);}
   rows.push({take:{id:t.id,name:t.name,mime:t.mime,status:t.status,created:t.created,...(t.recordedAt!==undefined?{recordedAt:t.recordedAt}:{}),elapsed:t.elapsed,lastMs:t.lastMs,reason:typeof t.reason==='string'?t.reason.slice(0,1000):'',chunkCount:chunks.length,bytes:chunks.reduce((n,c)=>n+c.size,0),revision:edit?1:0},chunks,edit});
  }
+ async function validateSamples(pcm){for(const channel of pcm.channels)for(const part of channel){const values=new Float32Array(await part.blob.arrayBuffer());for(const value of values)if(!Number.isFinite(value))fail('編集PCMに不正なサンプルがあります。保存を中止しました。');}}
  const scenes=[],pads=[];let layout=null;
- async function decodePCM(value){if(!value||value.mode!=='pcm'||!Array.isArray(value.channels)||value.channels.length>2)fail('パッドPCMの形式が不正です。');const pcm={...value,channels:[]};for(const channel of value.channels){if(!Array.isArray(channel)||channel.length>2048)fail('パッドPCMが大きすぎます。');const parts=[];for(const d of channel)parts.push(await get(d));pcm.channels.push(parts);}validateEdit(pcm);return pcm;}
+ async function decodePCM(value){if(!value||value.mode!=='pcm'||!Array.isArray(value.channels)||value.channels.length>2)fail('パッドPCMの形式が不正です。');const pcm={...value,channels:[]};for(const channel of value.channels){if(!Array.isArray(channel)||channel.length>2048)fail('パッドPCMが大きすぎます。');const parts=[];for(const d of channel)parts.push(await get(d));pcm.channels.push(parts);}validateEdit(pcm);await validateSamples(pcm);return pcm;}
  if(header.version===2){
   if(!Array.isArray(header.scenes)||!header.scenes.length||!Array.isArray(header.pads)||header.pads.length>256)fail('シーン／パッド数が不正です。');
   const sceneIds=new Set(),padIds=new Set();
@@ -189,22 +191,25 @@ async function parseBackup(file){
  }
  if(base+offset!==file.size)fail('バックアップ末尾に不正なデータがあります。');return {rows,scenes,pads,layout,selected:typeof header.selected==='string'?header.selected:null};
 }
-Store.prototype.importBackup=async function(parsed){
+Store.prototype.importBackup=async function(parsed,onProgress=()=>{}){
+ let savedRequests=0;const total=parsed.rows.reduce((n,r)=>n+1+r.chunks.length+(r.edit?1:0),0)+(parsed.scenes?.length||0)+(parsed.pads?.length||0)+1+(parsed.layout?1:0);const report=value=>{try{onProgress(value);}catch{}};report({stage:'保存要求を送信',doneFiles:0,totalFiles:total});
  const idMap=new Map(parsed.rows.map(row=>[row.take.id,uid()])),sceneMap=new Map((parsed.scenes||[]).map(s=>[s.id,uid()])),padMap=new Map((parsed.pads||[]).map(p=>[p.id,uid()]));
  await this.transaction(['takes','chunks','edits','meta','scenes','pads'],'readwrite',(tx,set,abort)=>{
   const t=tx.objectStore('takes').count(),ss=tx.objectStore('scenes').getAll(),pp=tx.objectStore('pads').count();let n=0;
   const done=()=>{if(++n!==3)return;
    if(pp.result+padMap.size>256){abort(Error('復元後の件数目安を超えます。先に外部バックアップを確認して整理してください。'));return;}
-   for(const row of parsed.rows){const id=idMap.get(row.take.id);tx.objectStore('takes').add({...row.take,id,restored:Date.now()});for(const c of row.chunks)tx.objectStore('chunks').add({...c,takeId:id});if(row.edit)tx.objectStore('edits').add({...row.edit,takeId:id});}
+   function write(table,method,value){const request=tx.objectStore(table)[method](value);request.addEventListener('success',()=>{savedRequests++;report(savedRequests===total?{stage:'保存を確定中'}:{stage:'保存要求の確認',doneFiles:savedRequests,totalFiles:total});});return request;}
+   for(const row of parsed.rows){const id=idMap.get(row.take.id);write('takes','add',{...row.take,id,restored:Date.now()});for(const c of row.chunks)write('chunks','add',{...c,takeId:id});if(row.edit)write('edits','add',{...row.edit,takeId:id});}
    const offset=Math.max(-1,...ss.result.map(s=>s.order))+1;
-   [...(parsed.scenes||[])].sort((a,b)=>a.order-b.order).forEach((s,i)=>tx.objectStore('scenes').add({...s,id:sceneMap.get(s.id),order:offset+i}));
-   for(const p of parsed.pads||[])tx.objectStore('pads').add({...p,id:padMap.get(p.id),sceneId:sceneMap.get(p.sceneId),sourceTakeId:idMap.get(p.sourceTakeId)||null});
-   tx.objectStore('meta').put({key:'selection',value:idMap.get(parsed.selected)||null});
-   if(parsed.layout)tx.objectStore('meta').put({key:'pad-layout',value:{mode:parsed.layout.mode,sceneId:sceneMap.get(parsed.layout.sceneId),editingPadId:padMap.get(parsed.layout.editingPadId)||null}});
+   [...(parsed.scenes||[])].sort((a,b)=>a.order-b.order).forEach((s,i)=>write('scenes','add',{...s,id:sceneMap.get(s.id),order:offset+i}));
+   for(const p of parsed.pads||[])write('pads','add',{...p,id:padMap.get(p.id),sceneId:sceneMap.get(p.sceneId),sourceTakeId:idMap.get(p.sourceTakeId)||null});
+   write('meta','put',{key:'selection',value:idMap.get(parsed.selected)||null});
+   if(parsed.layout)write('meta','put',{key:'pad-layout',value:{mode:parsed.layout.mode,sceneId:sceneMap.get(parsed.layout.sceneId),editingPadId:padMap.get(parsed.layout.editingPadId)||null}});
    set(idMap);
   };t.onsuccess=ss.onsuccess=pp.onsuccess=done;
- });idMap.sceneMap=sceneMap;idMap.padMap=padMap;return idMap;
+ });report({stage:'IndexedDB保存確定',doneFiles:total,totalFiles:total});idMap.sceneMap=sceneMap;idMap.padMap=padMap;return idMap;
 };
+Store.prototype.verifyImported=async function(mapping){return this.transaction(['takes','scenes','pads','edits'],'readonly',(tx,set,abort)=>{const t=tx.objectStore('takes').getAll(),s=tx.objectStore('scenes').getAll(),p=tx.objectStore('pads').getAll();let n=0;const done=()=>{if(++n!==3)return;const takes=new Set(t.result.map(v=>v.id)),scenes=new Set(s.result.map(v=>v.id)),pads=new Map(p.result.map(v=>[v.id,v]));try{for(const id of mapping.values())if(!takes.has(id))throw Error('保存後の素材参照がありません。');for(const id of mapping.sceneMap.values())if(!scenes.has(id))throw Error('保存後のシーン参照がありません。');for(const id of mapping.padMap.values()){const pad=pads.get(id);if(!pad||!scenes.has(pad.sceneId)||pad.sourceTakeId&&!takes.has(pad.sourceTakeId))throw Error('保存後のパッド参照が一致しません。');PCM.validate(pad.original);if(pad.edit)PCM.validate(pad.edit);}set({takes:mapping.size,scenes:mapping.sceneMap.size,pads:mapping.padMap.size});}catch(e){abort(e);}};t.onsuccess=s.onsuccess=p.onsuccess=done;});};
 class EditQueue{
  constructor(store,pack=PCM.pack,onState=()=>{}){this.store=store;this.pack=pack;this.onState=onState;this.jobs=new Map();}
  enqueue(id,state,revision){

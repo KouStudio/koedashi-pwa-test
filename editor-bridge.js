@@ -78,7 +78,7 @@
     onContext(fn){contexts.add(fn);},
     context(){return owner;},
     setContext(next){if(next.type===owner.type&&next.id===owner.id)return;for(const fn of contexts)fn(next,capture(),owner);owner=next;},
-    stopPreview(){stop();cursor();},
+    stopPreview(){window.KoedashiPreview?.stop();stop();cursor();},
     async prepare(state){await preparePeaks(state.original);await preparePeaks(state.data);},
     capture,restore,load,documents,hasData:()=>!!data,isBusy:()=>busy,
     lock(value){stop();setBusy(value);},

@@ -4,7 +4,7 @@ const $r=id=>document.getElementById(id),bridge=window.SoraEditorBridge,S=window
 const supported=!!(window.isSecureContext&&navigator.mediaDevices?.getUserMedia&&window.MediaRecorder&&(window.AudioContext||window.webkitAudioContext));
 const wavOpen=new Set();
 const takes=[];let activeId=null,base=null,loading=true,ready=false,capture=null,desiredName='',rawURL=null,rawTarget=null;
-let generation=0,backupFile=null,backupURL=null,selectionSaving=0,storageError='',hydrating=false;
+let restoring=false;let generation=0,backupFile=null,backupURL=null,selectionSaving=0,storageError='',hydrating=false;
 const recordingDate=ms=>{const d=new Date(ms),z=n=>String(n).padStart(2,'0');return z(d.getMonth()+1)+'/'+z(d.getDate())+' '+z(d.getHours())+':'+z(d.getMinutes())+':'+z(d.getSeconds());};
 const fullDate=t=>Number.isFinite(t.recordedAt)?new Date(t.recordedAt).getFullYear()+'/'+recordingDate(t.recordedAt):'録音日時の記録なし';
 const clock=ms=>{const s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');};
@@ -67,9 +67,9 @@ const recorder=new MicrophoneRecorder({
  onNotice(text){notice(text);if(capture)void reloadList();if(ready)void selectStored(activeId);refresh();},
  onComplete:result=>{void complete(result);}
 });
-function unavailable(){return loading||recorder.state!=='idle'||bridge.isBusy();}
+function unavailable(){return restoring||loading||recorder.state!=='idle'||bridge.isBusy();}
 function refresh(){
- const state=recorder.state,busy=state!=='idle'||loading;
+ const state=recorder.state,busy=state!=='idle'||loading||restoring;
  $r('recStart').disabled=busy||!supported||!ready;$r('recStop').disabled=state==='idle'||state==='stopping';
  $r('recStop').textContent=['requesting','countdown'].includes(state)?'キャンセル':'停止';
  $r('recPause').disabled=!['recording','paused'].includes(state);$r('recPause').textContent=state==='paused'?'再開':'一時停止';
@@ -151,8 +151,8 @@ async function complete({blob,elapsed,reason,partial=false}){
  if(reason)notice(reason+' 保存できた内容・末尾を確認してください。',true);
  if(take.rawFailed)notice('保存失敗：録音全体はまだメモリ内です。今すぐ外部バックアップまたは録音原本を保存してください。 '+take.error,true);
 }
-async function choose(take,{originalOnly=false}={}){
- if(unavailable()||take.id===activeId&&!originalOnly)return;
+async function choose(take,{originalOnly=false,allowDuringRestore=false}={}){
+ if((unavailable()&&!allowDuringRestore)||take.id===activeId&&!originalOnly)return;
  const previousOwner=bridge.context?.();stash();bridge.setContext?.({type:'take',id:take.id});loading=true;hydrating=true;rawTarget=take.id;refresh();const previous=bridge.capture();let recovery='';
  try{
   if(take.state&&!originalOnly)bridge.restore(take.state);
@@ -206,17 +206,25 @@ async function makeBackup({throwOnError=false}={}){
  }catch(e){$r('safeBackupStatus').textContent='バックアップ未実施／作成失敗：'+explain(e);if(throwOnError)throw e;}
  finally{loading=false;bridge.lock(false);forgetLive();render();}
 }
-async function importBackup(file,{onState=()=>{},isCancelled=()=>false}={}){
- if(unavailable()||!file)return {ok:false,message:'録音・読込・保存処理を終えてから復元してください。'};let result={ok:false};stash();loading=true;bridge.lock(true);refresh();let restoredId=null,restorePadMode=false,committed=false,padPrepared=false,hasLayout=false;
+async function importBackup(file,{onState=()=>{},onProgress=()=>{},isCancelled=()=>false}={}){
+ if(unavailable()||!file)return {ok:false,message:'録音・読込・保存処理を終えてから復元してください。'};
+ let phase='編集中データの保存',committed=false,padPrepared=false,finished=false,mapping=null,parsed=null,result={ok:false};restoring=true;stash();loading=true;bridge.lock(true);refresh();
+ const report=value=>{phase=value.stage;const done=value.doneBytes??value.doneFiles,total=value.totalBytes??value.totalFiles;notice('復元：'+phase+(Number.isFinite(done)&&total>0?' '+Math.floor(done/total*100)+'%':''));try{if(typeof window.CustomEvent==='function')window.dispatchEvent(new CustomEvent('koedashi-restore-progress',{detail:value}));onProgress(value);onState(value.stage+'…');}catch{}window.KoedashiDiagnostics?.record('restore-progress',{stage:phase,done:value.doneFiles,total:value.totalFiles});};
  try{
-  await edits.flushAll();await window.KoedashiPads?.beforeImport();padPrepared=!!window.KoedashiPads;onState('ファイルと音声データを検証中…');const parsed=await (window.KoedashiTransfer?KoedashiTransfer.parse(file):S.parseBackup(file));hasLayout=!!parsed.layout;restorePadMode=!!parsed.layout?.editingPadId;if(isCancelled())return {cancelled:true};
-  if(!window.confirm(parsed.rows.length+'テイク／'+(parsed.scenes?.length||0)+'シーン／'+(parsed.pads?.length||0)+'パッドを追加復元します。既存データは上書きしません。同じファイルを再度取り込むと重複追加されます。'+(parsed.transferSettings?'カウントダウンを'+(parsed.transferSettings.countdown?'オン':'オフ')+'に切り替えます。':'')))return {cancelled:true};onState('検証済みデータを追加復元中…');
-  const mapping=await store.importBackup(parsed);committed=true;restoredId=mapping.get(parsed.selected)||null;dirty();await reloadList();const warning=parsed.transferSettings?KoedashiTransfer.applySettings(parsed.transferSettings):'';notice('バックアップの検証と追加保存が完了しました。各テイクとパッドの音声を確認してください。'+warning);result={ok:true,warning};
- }catch(e){const message='復元失敗：'+explain(e)+' 既存の原音を削除・上書きしていません。';notice(message,true);result={ok:false,message};}
- finally{
-  loading=false;bridge.lock(false);forgetLive();render();
-  const restored=takes.find(t=>t.id===restoredId);if(committed&&!restorePadMode&&restored?.status==='complete')await choose(restored);
-  if(padPrepared)await window.KoedashiPads.afterImport(committed,{legacyEdit:!hasLayout&&!!restoredId});
+  report({stage:phase});await edits.flushAll();await window.KoedashiPads?.beforeImport();padPrepared=!!window.KoedashiPads;
+  report({stage:'ファイル構造確認'});parsed=await (window.KoedashiTransfer?KoedashiTransfer.parse(file,report):S.parseBackup(file,report));if(isCancelled())return {cancelled:true};
+  if(!window.confirm(parsed.rows.length+'テイク／'+(parsed.scenes?.length||0)+'シーン／'+(parsed.pads?.length||0)+'パッドを追加復元します。既存データは上書きしません。同じファイルを再度取り込むと重複追加されます。'+(parsed.transferSettings?'カウントダウンを'+(parsed.transferSettings.countdown?'オン':'オフ')+'に切り替えます。':'')))return {cancelled:true};
+  if(isCancelled())return {cancelled:true};report({stage:'検証済みデータを追加保存'});mapping=await store.importBackup(parsed,report);committed=true;window.KoedashiDiagnostics?.record('restore-id-map',{takes:[...mapping].slice(0,64),scenes:[...mapping.sceneMap].slice(0,64),pads:[...mapping.padMap].slice(0,64),counts:{takes:mapping.size,scenes:mapping.sceneMap.size,pads:mapping.padMap.size}});dirty();
+  report({stage:'保存後の参照照合'});const verified=await store.verifyImported(mapping);window.KoedashiDiagnostics?.record('restore-committed',verified);
+  await reloadList();const restoredId=mapping.get(parsed.selected)||null,restorePadMode=!!parsed.layout?.editingPadId;
+  report({stage:'画面・再生準備'});loading=false;bridge.lock(false);const restored=takes.find(t=>t.id===restoredId);let editorWarning='';if(!restorePadMode&&restored?.status==='complete'){await choose(restored,{allowDuringRestore:true});if(activeId!==restoredId||bridge.context().type!=='take'){editorWarning=' 保存は完了しましたが、素材を編集画面に開けませんでした。'+$r('recStatus').textContent;window.KoedashiDiagnostics?.record('restore-editor-warning',{id:restoredId,message:$r('recStatus').textContent});}}
+  let readiness=null;if(padPrepared){readiness=await window.KoedashiPads.afterImport(true,{legacyEdit:!parsed.layout&&!!restoredId});finished=true;}
+  const warning=editorWarning+(parsed.transferSettings?KoedashiTransfer.applySettings(parsed.transferSettings):'')+(readiness?.failed?.length?' 保存は完了しましたが、'+readiness.failed.length+'パッドの再生準備に失敗しました。「音声を再読込」と診断情報を確認してください。':'');
+  report({stage:'追加復元完了'});notice('バックアップの検証と追加保存が完了しました。参照照合・画面更新も完了しています。各シーンの音声を確認してください。'+warning,!!warning);result={ok:true,committed:true,warning,readiness};
+ }catch(e){window.KoedashiDiagnostics?.record('restore-failed',{stage:phase,name:e.name,message:String(e.message).slice(0,500),committed});const message=(committed?'追加保存は確定済みですが、':'復元失敗：')+'［'+phase+' / '+(e.name||'Error')+'］'+(e.name==='NotReadableError'?'選んだファイルを読み取れません。端末に取得済みか確認して選び直してください。':explain(e))+(committed?' 同じZIPの再読込は重複追加になります。診断情報を確認し、音声の再読込を試してください。':' 既存の原音を削除・上書きしていません。再試行できます。');notice(message,true);result={ok:false,committed,message,phase};
+ }finally{
+  loading=false;bridge.lock(false);forgetLive();if(padPrepared&&!finished)try{await window.KoedashiPads.afterImport(committed,{legacyEdit:!parsed?.layout});}catch(e){window.KoedashiDiagnostics?.record('restore-ui-failed',{message:e.message,committed});}
+  restoring=false;render();window.KoedashiPads?.refreshRestoreState?.();if(typeof window.CustomEvent==='function')window.dispatchEvent(new CustomEvent('koedashi-restore-progress',{detail:{stage:'復元操作終了',done:true}}));
  }
  return result;
 }
@@ -253,9 +261,9 @@ async function openSavedMaterial(id,history){
 }
 
 const bootPromise=boot();
-window.SoraRecordingSessions={ready:bootPromise,isReady:()=>ready,isRecording:()=>recorder.state!=='idle',
+window.SoraRecordingSessions={ready:bootPromise,isRestoring:()=>restoring,isReady:()=>ready,isRecording:()=>recorder.state!=='idle',
  async selectTake(id){if(unavailable())throw Error('録音・編集処理が終わるまでお待ちください。');const take=takes.find(t=>t.id===id);if(!take)throw Error('録音テイクがありません。');await choose(take);if(activeId!==id)throw Error('テイクを編集へ読み込めませんでした。');return bridge.capture();},
- async suspendForPad(){if(unavailable())throw Error('録音・編集処理を先に完了してください。');stash();activeId=null;await selectStored(null);render();},
+ async suspendForPad({allowDuringRestore=false}={}){if(unavailable()&&!allowDuringRestore)throw Error('録音・編集処理を先に完了してください。');stash();activeId=null;await selectStored(null);render();},
  async detachForPaste(){const take=takes.find(t=>t.id===activeId);if(!take)return null;stash();await edits.flushAll();const row=await store.read(take.id),reference={id:take.id,name:take.name,revision:row.take.revision};activeId=null;await selectStored(null);bridge.setContext({type:'file',id:null});render();return reference;},
  async openDetached(state){if(unavailable())throw Error('処理中です。');stash();await edits.flushAll();activeId=null;await selectStored(null);bridge.setContext({type:'file',id:null});bridge.restore(state);window.KoedashiPads?.showEditor();render();},
  openSavedMaterial,flush:()=>edits.flushAll(),refresh,makeBackup,exportBackup:()=>makeBackup({throwOnError:true}),importBackup,backupChanged:dirty,migration:()=>store.migration,

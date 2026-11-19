@@ -1,10 +1,10 @@
 'use strict';
 // Bump VERSION for every shell change. Do not add APIs, licenses or media here.
-const VERSION = 'koedashi-v2.6.6';
+const VERSION = 'koedashi-v2.6.7';
 const PREFIX = 'sora-audio-shell:' + encodeURIComponent(self.registration.scope) + ':';
 const CACHE = PREFIX + VERSION;
 const SHELL = [
-  './', 'index.html', 'style.css', 'compat.js?v=ios-1',
+  './', 'index.html', 'style.css', 'compat.js?v=ios-1', 'diagnostics.js', 'material-browser.js', 'guide.js', 'guide.css',
   'engine.js?v=long-audio-1', 'app.js?v=ios-1',
   'pwa.css', 'pwa.js', 'manifest.webmanifest',
   'recorder.css', 'editor-bridge.js', 'recorder-core.js', 'recorder-ui.js', 'safe-data.js', 'pads-data.js', 'pad-player.js', 'pads-ui.js', 'pads.css', 'take-export.js', 'pad-export.js', 'audio-tools.js', 'material-store.js', 'material-edit.js', 'material-edit.css', 'transfer-edit.js', 'pad-drag.js', 'pad-volume.js', 'selection-controls.js', 'selection-controls.css', 'quick-editor.js', 'quick-editor.css', 'field-ui.js', 'field-ui.css', 'simple-sort.js', 'simple-sort.css', 'playhead.js', 'playhead.css', 'transfer-zip.js', 'handoff.js', 'handoff.css', 'pad-drafts.js', 'save-method.js', 'save-method.css', 'performance-view.js', 'simple.css',
